@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+export const TUTORIAL_CELL_COUNT = 40;
+
 const tileUrl = 'data:image/png;base64,' + readFileSync(new URL('../src/assets/void_tile.png', import.meta.url)).toString('base64');
 
 /** Check the shipped artwork, not only the source files retained in the repository. */
@@ -26,7 +28,7 @@ export async function checkAndRecycleTutorial(page, { reload = true } = {}) {
     await seed.waitFor();
     await checkArtwork(page);
     assert.equal(await page.locator('.project-column').count(), 1);
-    assert.equal(await page.locator('.garden-item').count(), 39);
+    assert.equal(await page.locator('.garden-item').count(), TUTORIAL_CELL_COUNT);
     const id = await seed.getAttribute('data-id');
     for (const layer of ['flowers', 'stem', 'roots', 'minerals']) {
         assert(await page.locator(`.${layer}-zone .garden-item`).count() > 0, layer);

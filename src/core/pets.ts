@@ -11,7 +11,6 @@ import './shim';
 import type { GardenApp } from './app';
 import { CROW_PREVIEW_URL, mountCrow } from './crow';
 import { EXTRAS } from './extras';
-import { ITEM_TYPES } from './items';
 import type { GardenSettings } from './model';
 import { pictureTile } from './tiles';
 import { Modal } from './ui';
@@ -95,9 +94,7 @@ export class PetsModal extends Modal {
         const grid = contentEl.createDiv('garden-tiles');
 
         if (!EXTRAS) {
-            // What is coming, greyed out. The gnome and the pumpkin are items
-            // now, but this is where people have seen them waiting.
-            for (const type of [...ITEM_TYPES, ...PETS]) {
+            for (const type of PETS) {
                 pictureTile(grid, { kind: type.kind, label: type.label, preview: type.preview, state: 'Unavailable', disabled: true });
             }
             return;

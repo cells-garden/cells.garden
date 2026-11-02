@@ -19,7 +19,6 @@ import { PlantSync } from './plants';
 import { GardenQuestionModal, NewSpaceModal, RenameGardenModal, ShareGardenModal } from './share';
 import { SharePlantModal } from './share-plant';
 import { FriendsModal } from './friends';
-import { EXTRAS } from './extras';
 import { ItemsModal, shownItems } from './items';
 import { applyScene } from './scene';
 import { SettingsModal } from './settings';
@@ -457,12 +456,11 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
             reportIssueItem(),
             { label: 'About', onClick: () => routes ? location.assign('/about/') : new AboutModal().open() },
             { label: 'Export or import', onClick: () => openGardenFiles(app) },
-            // Items wait for Max's approval, so only a build with the extras offers them.
-            ...(EXTRAS ? [{
+            {
                 label: 'Items',
                 sub: itemCount ? itemCount + ' placed' : undefined,
                 onClick: () => new ItemsModal(app).open(),
-            }] : []),
+            },
             {
                 label: 'Pets',
                 sub: 'Coming soon',

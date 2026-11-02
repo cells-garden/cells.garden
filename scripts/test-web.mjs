@@ -506,6 +506,24 @@ async function scenario(browser, errors) {
     const desktopGround = await groundRatio(page);
     assert(desktopGround > 0.45 && desktopGround < 0.84,
         `desktop garden opened with the horizon misplaced: ${desktopGround}`);
+    // A flattened backdrop can still have the correct native size while painting a rectangle across the sky.
+    for (const layer of ['cloud', 'mountains', 'bg']) {
+        const coverage = await page.locator(`.garden-${layer}-layer`).evaluate(async el => {
+            const image = new Image();
+            image.src = JSON.parse(getComputedStyle(el).backgroundImage.slice(4, -1));
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+            const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let visible = 0;
+            for (let i = 3; i < data.length; i += 4) if (data[i] > 0) visible++;
+            return visible / (canvas.width * canvas.height);
+        });
+        assert(coverage > 0 && coverage < 1, `the ${layer} sprite needs both artwork and transparent sky`);
+    }
     // Pan view is for fingers: a mouse pans the garden in place.
     assert(!(await page.isVisible('.garden-pan-toggle')), 'the pan view button should not show on a desktop');
 
@@ -1002,36 +1020,40 @@ async function scenario(browser, errors) {
     await page.click('.drawing-toolbar-btn:has-text("✕")');
     assert.deepEqual(await corner(), { toggle: true, toolbars: 0 }, 'leaving drawing mode should bring the board toggle back');
 
-    // Items and pets wait for Max's approval, so this build shows neither, not
-    // even for a garden that holds them (one used on dev.cells.garden), and it
-    // keeps them in the garden untouched.
+    // Load a mixed-version garden. Pumpkins are public, hidden and unknown items still round-trip.
     const held = await page.evaluate(() => {
         const garden = JSON.parse(localStorage.getItem('cells.garden/v1'));
         garden.settings.petCrow = true;
-        garden.settings.items = [{ id: 'gnome_test', kind: 'gnome', x: 0.5 }, { id: 'lamp_test', kind: 'lamp', x: 1 }];
+        garden.settings.items = [
+            { id: 'gnome_test', kind: 'gnome', x: 0.5 },
+            { id: 'lamp_test', kind: 'lamp', x: 1 },
+            { id: 'pumpkin_test', kind: 'pumpkin', x: 2 },
+        ];
         localStorage.setItem('cells.garden/v1', JSON.stringify(garden));
         return garden.settings.items;
     });
     await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForSelector('.project-column');
-    await page.waitForTimeout(400);
-    const extras = await page.$$eval('.garden-items-layer, .garden-pets-layer, .garden-scene-item, .garden-pet', (els) => els.map((e) => e.className));
-    assert(extras.length === 0, `items or pets drawn in a build without them: ${JSON.stringify(extras)}`);
+    const pumpkins = page.locator('.garden-scene-item[data-kind="pumpkin"]');
+    await pumpkins.first().waitFor();
+    assert.equal(await page.locator('.garden-scene-item').count(), 1, 'only the saved pumpkin is drawn');
+    assert.equal(await page.locator('.garden-pets-layer, .garden-pet').count(), 0);
     if (await page.$('.auth-pill')) {
         await page.click('.auth-pill');
-        await page.waitForSelector('.garden-context-menu');
-        const pill = await page.$$eval('.garden-context-menu .garden-menu-label', (els) => els.map((e) => e.textContent));
-        assert(!pill.includes('Items') && pill.includes('Pets'), `the pill menu offers Items, or lost Pets: ${JSON.stringify(pill)}`);
         const pets = page.locator('.garden-context-menu .garden-menu-item:has(.garden-menu-label:text-is("Pets"))');
         assert(await pets.isDisabled(), 'Pets is a disabled coming-soon entry');
         assert.match(await pets.innerText(), /Coming soon/);
-        await pets.evaluate(el => el.click());
-        assert.equal(await page.locator('.modal .garden-tile').count(), 0, 'Pets cannot open a preview');
-        await page.keyboard.press('Escape');
+        const itemsRow = page.locator('.garden-context-menu .garden-menu-item:has(.garden-menu-label:text-is("Items"))');
+        assert.match(await itemsRow.innerText(), /1 placed/);
+        await itemsRow.click();
+        assert.deepEqual(await page.locator('.modal .garden-tile').evaluateAll(els => els.map(el => el.dataset.kind)), ['pumpkin']);
+        await page.getByRole('button', { name: 'Pumpkin, 1 placed' }).click();
+        await pumpkins.nth(1).waitFor();
+        await page.reload({ waitUntil: 'networkidle' });
+        await pumpkins.nth(1).waitFor();
     }
     await page.evaluate(() => window.garden.saveGardenData());
     const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('cells.garden/v1')).settings);
-    assert.deepEqual(kept.items, held, 'a build without items must keep the ones a garden holds');
+    assert.deepEqual(kept.items.slice(0, held.length), held, 'saved placements survive placing a new pumpkin');
     assert(kept.petCrow === true, 'a build without pets must keep their switches');
 
     // --- PWA: manifest and service worker are served ---------------------------
@@ -1138,6 +1160,22 @@ async function scenario(browser, errors) {
         await ipage.goto(`${BASE}#join=nope`, { waitUntil: 'networkidle' });
         assert(ipage.url().endsWith('#join=nope'), 'a malformed token must be left alone');
         await ictx.close();
+    }
+
+    // A saved phone camera from an older build can rest past the top and right edges.
+    {
+        const phone = await browser.newPage({ viewport: { width: 390, height: 700 }, isMobile: true, hasTouch: true });
+        await phone.addInitScript(() => localStorage.setItem('cells.garden/view/web', JSON.stringify({
+            zoom: 0.34, translateX: -192, translateY: 65, groundRatio: 0.8,
+        })));
+        await phone.goto(BASE, { waitUntil: 'networkidle' });
+        await phone.waitForFunction(() => {
+            const view = document.querySelector('.garden-canvas-viewport')?.getBoundingClientRect();
+            const world = document.querySelector('.garden-world')?.getBoundingClientRect();
+            return window.garden && view && world && world.top <= view.top + 1 && world.right >= view.right - 1
+                && world.left <= view.left + 1 && world.bottom >= view.bottom - 1;
+        });
+        await phone.close();
     }
 
     // iPhone: real touch input through the browser protocol.
@@ -2116,6 +2154,13 @@ async function accountScenario(browser, errors) {
     watchErrors(phone, 'account iphone', errors);
     await phone.goto(BASE, { waitUntil: 'load' });
     await phone.waitForFunction(() => document.querySelector('.garden-item[data-id="s_four"] .garden-assignees')?.getAttribute('aria-label') === 'Assigned to Ana, Bo, Cy and Dee');
+    const problem = phone.locator('.garden-problem');
+    await phone.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: 'Script error.' })));
+    assert.equal(await problem.count(), 0, 'a browser-redacted script error should leave the garden usable');
+    await phone.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: 'Garden view failed' })));
+    assert.match(await problem.textContent(), /Garden view failed/);
+    await problem.tap();
+    assert.equal(await problem.count(), 0);
     await phone.$eval('.kanban-scroll-container .garden-item[data-id="s_long"]', (el) => el.scrollIntoView({ block: 'center' }));
     await phone.waitForTimeout(300);
     const iphone = await assigneeGeometry(phone, ['f_one', 's_four', 's_plain', 's_long', 'r_gone', 'm_me']);

@@ -501,6 +501,24 @@ async function scenario(browser, errors) {
     const desktopGround = await groundRatio(page);
     assert(desktopGround > 0.45 && desktopGround < 0.84,
         `desktop garden opened with the horizon misplaced: ${desktopGround}`);
+    // A flattened backdrop can still have the correct native size while painting a rectangle across the sky.
+    for (const layer of ['cloud', 'mountains', 'bg']) {
+        const coverage = await page.locator(`.garden-${layer}-layer`).evaluate(async el => {
+            const image = new Image();
+            image.src = JSON.parse(getComputedStyle(el).backgroundImage.slice(4, -1));
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+            const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let visible = 0;
+            for (let i = 3; i < data.length; i += 4) if (data[i] > 0) visible++;
+            return visible / (canvas.width * canvas.height);
+        });
+        assert(coverage > 0 && coverage < 1, `the ${layer} sprite needs both artwork and transparent sky`);
+    }
     // Pan view is for fingers: a mouse pans the garden in place.
     assert(!(await page.isVisible('.garden-pan-toggle')), 'the pan view button should not show on a desktop');
 
@@ -1021,7 +1039,7 @@ async function scenario(browser, errors) {
         await page.waitForSelector('.modal .garden-tile');
         const tiles = await page.$$eval('.modal .garden-tile', (els) => els.map((e) => [e.getAttribute('aria-label'), e.disabled]));
         console.log('pets without extras:', tiles);
-        assert.deepEqual(tiles, [['Garden gnome, unavailable', true], ['Pumpkin, unavailable', true], ['Crow, unavailable', true]],
+        assert.deepEqual(tiles, [['Pumpkin, unavailable', true], ['Crow, unavailable', true]],
             'the Pets menu shows what is coming, greyed out');
         await page.keyboard.press('Escape');
     }
@@ -1134,6 +1152,22 @@ async function scenario(browser, errors) {
         await ipage.goto(`${BASE}#join=nope`, { waitUntil: 'networkidle' });
         assert(ipage.url().endsWith('#join=nope'), 'a malformed token must be left alone');
         await ictx.close();
+    }
+
+    // A saved phone camera from an older build can rest past the top and right edges.
+    {
+        const phone = await browser.newPage({ viewport: { width: 390, height: 700 }, isMobile: true, hasTouch: true });
+        await phone.addInitScript(() => localStorage.setItem('cells.garden/view/web', JSON.stringify({
+            zoom: 0.34, translateX: -192, translateY: 65, groundRatio: 0.8,
+        })));
+        await phone.goto(BASE, { waitUntil: 'networkidle' });
+        await phone.waitForFunction(() => {
+            const view = document.querySelector('.garden-canvas-viewport')?.getBoundingClientRect();
+            const world = document.querySelector('.garden-world')?.getBoundingClientRect();
+            return window.garden && view && world && world.top <= view.top + 1 && world.right >= view.right - 1
+                && world.left <= view.left + 1 && world.bottom >= view.bottom - 1;
+        });
+        await phone.close();
     }
 
     // iPhone: real touch input through the browser protocol.
@@ -2072,6 +2106,13 @@ async function accountScenario(browser, errors) {
     watchErrors(phone, 'account iphone', errors);
     await phone.goto(BASE, { waitUntil: 'load' });
     await phone.waitForFunction(() => document.querySelector('.garden-item[data-id="s_four"] .garden-assignees')?.getAttribute('aria-label') === 'Assigned to Ana, Bo, Cy and Dee');
+    const problem = phone.locator('.garden-problem');
+    await phone.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: 'Script error.' })));
+    assert.equal(await problem.count(), 0, 'a browser-redacted script error should leave the garden usable');
+    await phone.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: 'Garden view failed' })));
+    assert.match(await problem.textContent(), /Garden view failed/);
+    await problem.tap();
+    assert.equal(await problem.count(), 0);
     await phone.$eval('.kanban-scroll-container .garden-item[data-id="s_long"]', (el) => el.scrollIntoView({ block: 'center' }));
     await phone.waitForTimeout(300);
     const iphone = await assigneeGeometry(phone, ['f_one', 's_four', 's_plain', 's_long', 'r_gone', 'm_me']);

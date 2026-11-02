@@ -23,7 +23,7 @@ if (IOS) document.documentElement.dataset.lite = 'true';
 function showProblem(message: string) {
     if (!IOS) return;
     const ios = /OS (\d+)_(\d+)/.exec(nav.userAgent);
-    const where = ios ? `iOS ${ios[1]}.${ios[2]}` : nav.userAgent.slice(0, 60);
+    const where = ios ? `iOS ${ios[1]}.${ios[2]}` : 'iOS';
     let bar = document.querySelector<HTMLElement>('.garden-problem');
     if (!bar) {
         bar = document.body.createDiv('garden-problem');
@@ -31,7 +31,12 @@ function showProblem(message: string) {
     }
     bar.textContent = `Something went wrong: ${message} (${where}). Tap to hide.`;
 }
-window.addEventListener('error', (e) => showProblem(e.message || String(e.error)));
+window.addEventListener('error', (event) => {
+    // Browsers redact some script errors to this message, with no source or exception.
+    if (!event.error && !event.filename && /^Script error\.?$/i.test(event.message)) return;
+    const message = event.error instanceof Error ? event.error.message : event.message;
+    if (message || event.error) showProblem(message || String(event.error));
+});
 window.addEventListener('unhandledrejection', (e) => {
     const reason = e.reason as { message?: string } | undefined;
     // Network hiccups to the backend are handled by the app; only real faults show.
@@ -68,12 +73,12 @@ if (!extensionOAuthHandoff) {
         // Safari/PWA can otherwise keep an older worker for a surprisingly long
         // time. Explicitly ask for an update on every app boot.
         onRegisteredSW(_swUrl, registration) {
-            void registration?.update();
-            if (registration && location.hostname === 'dev.cells.garden') {
+            if (!registration) return;
+            const update = () => registration.update().catch(error => console.warn('Service worker update check failed.', error));
+            void update();
+            if (location.hostname === 'dev.cells.garden') {
                 const check = () => {
-                    if (document.visibilityState === 'visible' && navigator.onLine) {
-                        void registration.update().catch(error => console.warn('Development update check failed.', error));
-                    }
+                    if (document.visibilityState === 'visible' && navigator.onLine) void update();
                 };
                 window.setInterval(check, 15000);
                 document.addEventListener('visibilitychange', check);

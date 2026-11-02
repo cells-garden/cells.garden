@@ -100,7 +100,7 @@ async function capture(browser, url, fixture, assetBytes, viewport, path) {
             localStorage.clear();
             localStorage.setItem('cells.garden/v1', JSON.stringify(garden));
             localStorage.setItem('cells.garden/board', 'shown');
-            localStorage.setItem('cells.garden/view/web', JSON.stringify({ zoom: 0.65, translateX: 40, translateY: 20, groundRatio: 0.65, viewportWidth: size.width, viewportHeight: size.height, kanbanScrollLeft: 0, kanbanScrollTop: 0 }));
+            localStorage.setItem('cells.garden/view/web', JSON.stringify({ zoom: size.zoom, translateX: 40, translateY: 20, groundRatio: 0.65, viewportWidth: size.width, viewportHeight: size.height, kanbanScrollLeft: 0, kanbanScrollTop: 0 }));
         }, { garden: fixture, size: viewport });
         const page = await context.newPage();
         page.on('pageerror', error => failures.push(error.message));
@@ -223,8 +223,10 @@ export async function buildGardenReview(name, { root = ROOT } = {}) {
         const comparisons = [];
         for (const viewport of VIEWPORTS) {
             const before = resolve(output, `${viewport.name}-before.png`), after = resolve(output, `${viewport.name}-after.png`), diff = resolve(output, `${viewport.name}-diff.png`);
-            const beforeScene = await capture(browser, servers[0].url, fixture, baseline, viewport, before);
-            const afterScene = await capture(browser, servers[1].url, fixture, bytes, viewport, after);
+            // Zoom out to expose the void tile. Other artwork is inspected close up.
+            const view = { ...viewport, zoom: name === 'void-tile' ? 0.2 : 0.65 };
+            const beforeScene = await capture(browser, servers[0].url, fixture, baseline, view, before);
+            const afterScene = await capture(browser, servers[1].url, fixture, bytes, view, after);
             const stats = await compare(browser, before, after, diff);
             record(before, `${viewport.name}: current garden`, 'before'); record(after, `${viewport.name}: candidate garden`, 'after'); record(diff, `${viewport.name}: changed pixels`, 'diff');
             comparisons.push({ viewport: viewport.name, ...stats, beforeScene, afterScene });

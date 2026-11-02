@@ -92,8 +92,7 @@ export class PetsModal extends Modal {
         const grid = contentEl.createDiv('garden-tiles');
 
         if (!EXTRAS) {
-            // What is coming, greyed out. The gnome and the pumpkin are items
-            // now, but this is where people have seen them waiting.
+            // Preview the available item and pet artwork until extras ship.
             for (const type of [...ITEM_TYPES, ...PETS]) {
                 pictureTile(grid, { kind: type.kind, label: type.label, preview: type.preview, state: 'Unavailable', disabled: true });
             }

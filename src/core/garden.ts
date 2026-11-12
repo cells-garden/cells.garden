@@ -1456,9 +1456,8 @@ export class GardenView extends View {
 
                         const savedCameraVisible = !!persistedState && this.cameraInView();
                         if (!savedCameraVisible) {
-                            // A fresh camera opens with the garden filling the pane from top to
-                            // bottom: the void shows only past the garden's ends, if at all.
-                            this.zoom = Math.max(DEFAULT_GARDEN_ZOOM, this.fillHeightZoom(world, viewport));
+                            const fillWidth = this.touchBoardVisible() ? viewport.offsetWidth / world.offsetWidth : 0;
+                            this.zoom = Math.min(this.zoomMax, Math.max(DEFAULT_GARDEN_ZOOM, this.fillHeightZoom(world, viewport), fillWidth));
                             const middlePlantIndex = Math.floor(this.shownPlants().length / 2);
                             const middlePlantWorldX = plantCentre(middlePlantIndex);
                             this.currentTranslateX = viewport.offsetWidth / 2 - middlePlantWorldX * this.zoom;
@@ -1719,7 +1718,7 @@ export class GardenView extends View {
         // A taller pane may require a larger minimum zoom. Resolve that first.
         this.settleCamera(false);
         const safe = Math.max(0.12, Math.min(0.92, ratio));
-        const bounds = this.cameraBounds(world, viewport, this.zoom, closed ? 0 : VOID_REACH);
+        const bounds = this.cameraBounds(world, viewport, closed);
         const desired = viewport.offsetHeight * safe - this._dynamicGroundLineY * this.zoom;
         this.currentTranslateY = Math.min(bounds.y.max, Math.max(bounds.y.min, desired));
         this.applyWorldTransform(world, viewport);
@@ -2111,15 +2110,16 @@ export class GardenView extends View {
         return Math.min(this.zoomMax, viewport.offsetHeight / (world.offsetHeight || 1));
     }
 
-    /**
-     * The translate range per axis. An edge of the garden may come into the pane
-     * by `reach` of it, and no further, so the void shows only as a rim. Once the
-     * garden is too small for that on an axis, it holds the middle. The two cases
-     * meet exactly, so zooming across the change never jumps.
-     */
-    private cameraBounds(world: HTMLElement, viewport: HTMLElement, zoom = this.zoom, reach = VOID_REACH) {
+    private touchBoardVisible(): boolean {
+        return !this.peeking() && window.matchMedia('(pointer: coarse)').matches;
+    }
+
+    /** In the touch board, settle against the garden's edge. Zooming out still
+     * reveals the void around a smaller garden. Pan view allows a rim at any zoom. */
+    private cameraBounds(world: HTMLElement, viewport: HTMLElement, closed = false) {
+        const reach = closed || this.touchBoardVisible() ? 0 : VOID_REACH;
         const axis = (view: number, size: number) => {
-            const span = size * zoom;
+            const span = size * this.zoom;
             const rim = view * reach;
             const min = view - span - rim;
             const max = rim;
@@ -3072,19 +3072,15 @@ export class GardenView extends View {
         const wormLayer = world.createDiv("garden-worm-layer");
         const night = starOpacity > 0.1;
 
-        // What stands in the garden: the items, and one layer in front of them
-        // the pets. Both wait for Max's approval, so only a build with the
-        // extras has them.
-        let itemsLayer: HTMLElement | null = null;
+        const itemsLayer = await renderGardenItems(world, this.app, {
+            width: calculatedWidth,
+            toWorld: slotToWorld,
+            toSlot: worldToSlot,
+            spriteSize: (url) => this.getImageDimensions(url),
+            onDrag: (item) => { this._itemDrag = item; },
+        });
+        itemsLayer.toggleClass('is-night', night);
         if (EXTRAS) {
-            itemsLayer = await renderGardenItems(world, this.app, {
-                width: calculatedWidth,
-                toWorld: slotToWorld,
-                toSlot: worldToSlot,
-                spriteSize: (url) => this.getImageDimensions(url),
-                onDrag: (item) => { this._itemDrag = item; },
-            });
-            itemsLayer.toggleClass('is-night', night);
             const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             const pets = renderGardenPets(world, this.app.settings, {
                 width: calculatedWidth,
@@ -3121,7 +3117,7 @@ export class GardenView extends View {
             fireflyLayer.style.setProperty('--glow-opacity', String(state.starOpacity));
             fireflyLayer.style.setProperty('--firefly-color', state.starOpacity > 0.1 ? '#7eb357' : '#5e7e50');
             // Pumpkins light up when the fireflies do.
-            itemsLayer?.toggleClass('is-night', state.starOpacity > 0.1);
+            itemsLayer.toggleClass('is-night', state.starOpacity > 0.1);
         }, 60000);
 
         // --- The ant walks the horizon ---

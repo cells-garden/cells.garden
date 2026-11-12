@@ -21,7 +21,7 @@ export function supabaseEnv(mode: string) {
 }
 
 /**
- * Whether a build carries the garden's items and pets (src/core/extras.ts),
+ * Whether a build carries experimental features (src/core/extras.ts),
  * which stay out of production until Max approves them. The dev server has
  * them, and so does Vercel's build of the dev branch when `fromDevBranch`
  * allows it (only the web app is deployed from there). CELLS_EXTRAS=1 turns

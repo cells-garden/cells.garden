@@ -1,13 +1,10 @@
 /**
  * The item layer: things that stand in the garden, put there from the Items
- * menu. A gnome just stands; a pumpkin stands too, and lights up at night.
- * Neither is alive: an item never moves by itself and a tap does nothing. It
- * drags along the ground with a mouse or a finger, and a right-click or a
- * hold offers Remove.
+ * menu. The pumpkin lights up at night. Drag an item along the ground with
+ * a mouse or a finger. A right-click or a hold offers Remove.
  *
  * Items are garden settings (GardenItem in model.ts), so everyone who shares
- * the garden sees them where they were put. Only a build with the extras
- * (extras.ts) draws them or offers the menu.
+ * the garden sees them where they were put.
  */
 import './shim';
 import type { GardenApp } from './app';
@@ -16,7 +13,6 @@ import type { GardenItem, GardenSettings, ItemKind } from './model';
 import { pictureTile } from './tiles';
 import { Modal } from './ui';
 
-import gnomeUrl from '../assets/pets/gnome.png';
 import pumpkinOffUrl from '../assets/pack/pumpkin/pumpkin_1_off.png';
 import pumpkinOn1Url from '../assets/pack/pumpkin/pumpkin_1_on_1.png';
 import pumpkinOn2Url from '../assets/pack/pumpkin/pumpkin_1_on_2.png';
@@ -33,9 +29,8 @@ export interface ItemType {
     preview: string;
 }
 
-/** Every item. A new one is its art and one more entry here (and its kind in ItemKind). */
+/** Items available to place and draw. Hidden kinds stay in saved gardens. */
 export const ITEM_TYPES: ItemType[] = [
-    { kind: 'gnome', label: 'Garden gnome', sprite: gnomeUrl, preview: gnomeUrl },
     {
         kind: 'pumpkin',
         label: 'Pumpkin',
@@ -83,7 +78,7 @@ function saveItems(app: GardenApp, items: GardenItem[]) {
 /** Put a new item on the ground in the middle of the camera's view, where no plant hides it (GardenView.itemSpot). */
 export function placeItem(app: GardenApp, kind: ItemKind) {
     const id = kind + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const x = app.view?.itemSpot(app.settings.items.map(item => item.x)) ?? 0;
+    const x = app.view?.itemSpot(shownItems(app.settings).map(item => item.x)) ?? 0;
     saveItems(app, [...app.settings.items, { id, kind, x: storedX(x) }]);
     app.view?.scheduleRender();
 }

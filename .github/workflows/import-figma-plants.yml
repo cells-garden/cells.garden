@@ -1,0 +1,47 @@
+name: Import Figma plants
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-figma-plants
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: dev
+          persist-credentials: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
+      - name: Import plants marked Ready for dev in Figma
+        env:
+          FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+        run: node scripts/import-figma-plants.mjs
+      - name: Publish new plant assets to dev
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No new plants are marked Ready for dev."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add design/asset-map.json src/core/assets.ts scripts/map-design-assets.mjs src/assets/pack
+          git diff --cached --check
+          npm run typecheck
+          npm run lint
+          npm run test:design
+          npm run build:web
+          git commit -m "Import Figma plants marked Ready for dev"
+          git push origin HEAD:dev

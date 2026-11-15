@@ -28,11 +28,15 @@ jobs:
           node-version: 24
       - name: Install dependencies
         run: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
-      - name: Check Figma authentication status
+      - name: Diagnose Figma authentication without exposing the token
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
         run: |
-          curl --silent --show-error --write-out "Figma /v1/me HTTP %{http_code}; %{content_type}\n" --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/me" --output /dev/null
+          if [[ "$FIGMA_TOKEN" =~ ^figd_[A-Za-z0-9_-]{40,200}$ ]]; then echo "PAT format: plausible"; else echo "PAT format: unexpected"; fi
+          without=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' 'https://api.figma.com/v1/me')
+          dummy=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --header 'X-Figma-Token: deliberately-invalid' 'https://api.figma.com/v1/me')
+          configured=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --header "X-Figma-Token: $FIGMA_TOKEN" 'https://api.figma.com/v1/me')
+          echo "Figma /v1/me: without=$without dummy=$dummy configured=$configured"
       - name: Verify Figma API access
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}

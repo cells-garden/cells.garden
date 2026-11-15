@@ -31,7 +31,8 @@ jobs:
       - name: Verify Figma API access
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-        run: curl --fail --silent --show-error --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/files/WJgKfsKcxUpuNkDvxI9gEx?depth=1" --output /dev/null
+        run: |
+          curl --fail --silent --show-error --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/files/WJgKfsKcxUpuNkDvxI9gEx?depth=1" --output /dev/null
       - name: Import plants marked Ready for dev in Figma
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}

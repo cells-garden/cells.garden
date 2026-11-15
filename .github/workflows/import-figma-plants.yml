@@ -28,6 +28,11 @@ jobs:
           node-version: 24
       - name: Install dependencies
         run: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
+      - name: Check Figma authentication status
+        env:
+          FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+        run: |
+          curl --silent --show-error --write-out "Figma /v1/me HTTP %{http_code}; %{content_type}\n" --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/me" --output /dev/null
       - name: Verify Figma API access
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}

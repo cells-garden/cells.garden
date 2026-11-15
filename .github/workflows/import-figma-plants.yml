@@ -1,9 +1,12 @@
 name: Import Figma plants
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/import-figma-plants.yml']
   schedule:
     - cron: '17 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write

@@ -69,7 +69,9 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
         { id: '20:1', type: 'INSTANCE', name: 'src/assets/pack/plant_10/stem/stem1.png', componentId: stem.id, width: stem.width, height: stem.height },
         { id: '20:2', type: 'INSTANCE', name: 'src/assets/pack/plant_10/flowers/flower1.png', componentId: flower.id, width: flower.width, height: flower.height },
     ] }] }] } };
-    writeFileSync(resolve(root, 'design/asset-map.json'), JSON.stringify({ assets: [] }));
+    const existing = { path: 'src/assets/pack/plant_9/stem/Stem_1.png', format: 'png', width: 39, height: 12, sha256: 'unchanged' };
+    const existingRow = '    ' + JSON.stringify(existing);
+    writeFileSync(resolve(root, 'design/asset-map.json'), '{\n  "assets": [\n' + existingRow + '\n  ]\n}\n');
     const replies = [
         { ok: true, json: async () => file },
         { ok: true, json: async () => ({ images: { '20:1': 'https://img/1', '20:2': 'https://img/2' } }) },
@@ -81,7 +83,43 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
     assert(existsSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')));
     assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')), stemBytes);
     const index = JSON.parse(readFileSync(resolve(root, 'design/asset-map.json')));
-    assert.equal(index.assets.length, 2);
+    assert.equal(index.assets.length, 3);
+    assert(readFileSync(resolve(root, 'design/asset-map.json'), 'utf8').includes(existingRow));
     assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_10: 'Fern'/);
     assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_10: 'Fern'/);
+    const nextFamily = { ...family, id: '11:0', name: 'Source/Plants/Birch', children: family.children.map(part => ({ ...part, id: part.id.replace('10:', '11:') })) };
+    const page = file.document.children[0];
+    page.children.push(nextFamily);
+    page.children[1].children.push(
+        { id: '21:1', type: 'INSTANCE', name: 'src/assets/pack/plant_11/stem/stem1.png', componentId: '11:1', width: stem.width, height: stem.height },
+        { id: '21:2', type: 'INSTANCE', name: 'src/assets/pack/plant_11/flowers/flower1.png', componentId: '11:2', width: flower.width, height: flower.height },
+    );
+    const nextReplies = [
+        { ok: true, json: async () => file },
+        { ok: true, json: async () => ({ images: { '21:1': 'https://img/3', '21:2': 'https://img/4' } }) },
+        { ok: true, arrayBuffer: async () => stemBytes.buffer.slice(stemBytes.byteOffset, stemBytes.byteOffset + stemBytes.byteLength) },
+        { ok: true, arrayBuffer: async () => flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength) },
+    ];
+    const second = await importReadyPlants({ token: 'test-token', root, fetcher: async () => nextReplies.shift() });
+    assert.deepEqual(second.imported, [{ plantType: 'plant_11', name: 'Birch', sprites: 2 }]);
+    assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_11: 'Birch'/);
+    assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_11: 'Birch'/);
+    assert.equal(JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'))).assets.length, 5);
+    const third = await importReadyPlants({ token: 'test-token', root, fetcher: async () => ({ ok: true, json: async () => file }) });
+    assert.deepEqual(third, { imported: [], unchanged: true });
+});
+
+test('ready families already published are not imported a second time', () => {
+    const published = { assets: [
+        { path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' },
+        { path: 'src/assets/pack/plant_10/flowers/flower1.png', sourceNodeId: '10:2' },
+    ] };
+    assert.deepEqual(discoverReadyPlants(fixture(), published, ['plant_10']), []);
+});
+
+test('a partly registered family cannot be silently duplicated as another type', () => {
+    const published = { assets: [
+        { path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' },
+    ] };
+    assert.throws(() => discoverReadyPlants(fixture(), published, ['plant_10']), /Partially registered plant family/);
 });

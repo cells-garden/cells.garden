@@ -112,7 +112,7 @@ test('generated plugin exports selected and edited mapped sources serially witho
     const pluginManifest = JSON.parse(readFileSync(resolve(bridge.pluginDirectory, 'manifest.json')));
     assert.deepEqual(pluginManifest.networkAccess, { allowedDomains: ['none'], devAllowedDomains: ['http://localhost:5173'] });
     assert.equal(pluginManifest.enablePrivatePluginApi, true);
-    assert.equal(bridge.assetCount, 289);
+    assert.equal(bridge.assetCount, new Set([...coverage.assets.filter(asset => asset.format === 'png' && asset.sourceNodeId && asset.exportNodeId), ...Object.values(manifest.assets)].map(asset => asset.path)).size);
     const source = readFileSync(resolve(bridge.pluginDirectory, 'code.js'), 'utf8');
     const page = Object.freeze({ id: manifest.pageNodeId, type: 'PAGE' });
     const roots = { id: manifest.assets['roots-icon'].sourceNodeId, type: 'COMPONENT', parent: page };

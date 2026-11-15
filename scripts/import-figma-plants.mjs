@@ -5,9 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 const FILE_KEY = 'WJgKfsKcxUpuNkDvxI9gEx';
 const ROOT = process.cwd();
-const MAP = resolve(ROOT, 'design/asset-map.json');
-const ASSETS = resolve(ROOT, 'src/core/assets.ts');
-const MAPPER = resolve(ROOT, 'scripts/map-design-assets.mjs');
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const need = (ok, message) => { if (!ok) throw new Error(message); };
@@ -27,7 +24,13 @@ export function discoverReadyPlants(file, index, existingFolders = []) {
     const exports = new Map(walk(exportSection).map(node => [node.name, node]));
     const existing = new Set([...existingFolders, ...index.assets.map(asset => /^src\/assets\/pack\/(plant_\d+)\//.exec(asset.path)?.[1]).filter(Boolean)]);
     const nextNumber = Math.max(0, ...[...existing].map(name => Number(/^plant_(\d+)$/.exec(name)?.[1] || 0))) + 1;
-    const families = walk(page).filter(node => node.type === 'FRAME' && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV');
+    const knownSources = new Set(index.assets.map(asset => asset.sourceNodeId).filter(Boolean));
+    const families = walk(page).filter(node => node.type === 'FRAME' && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV').filter(family => {
+        const components = (family.children || []).filter(node => node.type === 'COMPONENT');
+        const mappedCount = components.filter(component => knownSources.has(component.id)).length;
+        need(!mappedCount || mappedCount === components.length, `Partially registered plant family: ${family.name}`);
+        return !mappedCount;
+    });
     return families.map((family, offset) => {
         const displayName = family.name.slice('Source/Plants/'.length).trim();
         need(displayName && !/[\\/:*?"<>|]/.test(displayName), `Invalid plant family name: ${family.name}`);
@@ -62,7 +65,8 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     need(response.ok, `Figma file request failed: HTTP ${response.status}`);
     const file = await response.json();
     const indexPath = resolve(root, 'design/asset-map.json');
-    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const indexText = readFileSync(indexPath, 'utf8');
+    const index = JSON.parse(indexText);
     const folders = (await import('node:fs')).readdirSync(resolve(root, 'src/assets/pack'), { withFileTypes: true })
         .filter(entry => entry.isDirectory() && /^plant_\d+$/.test(entry.name)).map(entry => entry.name);
     const families = discoverReadyPlants(file, index, folders);
@@ -91,6 +95,10 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     const map = JSON.parse(JSON.stringify(index));
     map.assets.push(...additions.map(item => item.entry));
     map.assets.sort((a, b) => a.path.localeCompare(b.path, 'en', { numeric: true }));
+    const sections = /^([\s\S]*?"assets": \[\r?\n)[\s\S]*?(  \]\r?\n\}\r?\n?)$/.exec(indexText);
+    need(sections, 'Unexpected asset index format.');
+    const newline = indexText.includes('\r\n') ? '\r\n' : '\n';
+    const updatedIndex = sections[1] + map.assets.map(asset => '    ' + JSON.stringify(asset)).join(',' + newline) + newline + sections[2];
     const sourcePath = resolve(root, 'src/core/assets.ts');
     let source = readFileSync(sourcePath, 'utf8');
     const mapperPath = resolve(root, 'scripts/map-design-assets.mjs');
@@ -99,16 +107,21 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
         need(!source.includes(`${family.plantType}:`) && !mapper.includes(`${family.plantType}:`), `Plant type name already exists: ${family.plantType}`);
         return { ...family, escaped: family.displayName.replaceAll("'", "\\'") };
     });
-    source = source.replace(/(plant_9: 'Plume',\r?\n)(};)/, `$1${names.map(family => `    ${family.plantType}: '${family.escaped}',\n`).join('')}$2`);
-    mapper = mapper.replace(/(plant_9: 'Plume')(?=\s*})/, `$1, ${names.map(family => `${family.plantType}: '${family.escaped}'`).join(', ')}`);
-    need(source.includes(names.at(-1).plantType) && mapper.includes(names.at(-1).plantType), 'Could not update both plant-name registries.');
+    const registryStart = source.indexOf('export const PLANT_TYPE_NAMES');
+    const registryEnd = source.indexOf('\n};', registryStart);
+    const mapperLine = mapper.split(/\r?\n/).find(line => line.startsWith('const PLANTS = {'));
+    need(registryStart !== -1 && registryEnd > registryStart && mapperLine?.endsWith(' };'), 'Could not find both plant-name registries.');
+    const sourceNewline = source.includes('\r\n') ? '\r\n' : '\n';
+    source = source.slice(0, registryEnd + 1) + names.map(family => `    ${family.plantType}: '${family.escaped}',`).join(sourceNewline) + sourceNewline + source.slice(registryEnd + 1);
+    const closing = mapperLine.lastIndexOf(' }');
+    mapper = mapper.replace(mapperLine, mapperLine.slice(0, closing) + ', ' + names.map(family => `${family.plantType}: '${family.escaped}'`).join(', ') + mapperLine.slice(closing));
     for (const item of additions) {
         const target = resolve(root, item.path);
         mkdirSync(dirname(target), { recursive: true });
         need(!existsSync(target), `Refusing to overwrite existing asset: ${item.path}`);
         writeFileSync(target, item.bytes, { flag: 'wx' });
     }
-    writeFileSync(indexPath, JSON.stringify(map, null, 2) + '\n');
+    writeFileSync(indexPath, updatedIndex);
     writeFileSync(sourcePath, source);
     writeFileSync(mapperPath, mapper);
     return { imported: families.map(family => ({ plantType: family.plantType, name: family.displayName, sprites: family.parts.length })) };

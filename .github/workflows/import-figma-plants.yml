@@ -32,7 +32,10 @@ jobs:
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
         run: |
-          curl --fail --silent --show-error --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/files/WJgKfsKcxUpuNkDvxI9gEx?depth=1" --output /dev/null
+          response=$(curl --silent --show-error --write-out '\nHTTP_STATUS:%{http_code}' --header "X-Figma-Token: $FIGMA_TOKEN" "https://api.figma.com/v1/files/WJgKfsKcxUpuNkDvxI9gEx?depth=1")
+          status=$(printf '%s' "$response" | sed -n 's/^HTTP_STATUS://p')
+          printf '%s\n' "$response" | sed '/^HTTP_STATUS:/d'
+          test "$status" = "200"
       - name: Import plants marked Ready for dev in Figma
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}

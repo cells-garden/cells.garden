@@ -27,7 +27,14 @@ export function discoverReadyPlants(file, index, existingFolders = []) {
     const exports = new Map(walk(exportSection).map(node => [node.name, node]));
     const existing = new Set([...existingFolders, ...index.assets.map(asset => /^src\/assets\/pack\/(plant_\d+)\//.exec(asset.path)?.[1]).filter(Boolean)]);
     const nextNumber = Math.max(0, ...[...existing].map(name => Number(/^plant_(\d+)$/.exec(name)?.[1] || 0))) + 1;
-    const families = walk(page).filter(node => node.type === 'FRAME' && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV');
+    const registered = new Set(index.assets.map(asset => asset.sourceNodeId).filter(Boolean));
+    const families = walk(page).filter(node => (node.type === 'FRAME' || node.type === 'COMPONENT_SET')
+        && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV').filter(family => {
+        const components = (family.children || []).filter(node => node.type === 'COMPONENT');
+        const count = components.filter(component => registered.has(component.id)).length;
+        need(count === 0 || count === components.length, `Partially imported plant family: ${family.name}`);
+        return count !== components.length || !components.length;
+    });
     return families.map((family, offset) => {
         const displayName = family.name.slice('Source/Plants/'.length).trim();
         need(displayName && !/[\\/:*?"<>|]/.test(displayName), `Invalid plant family name: ${family.name}`);
@@ -99,9 +106,11 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
         need(!source.includes(`${family.plantType}:`) && !mapper.includes(`${family.plantType}:`), `Plant type name already exists: ${family.plantType}`);
         return { ...family, escaped: family.displayName.replaceAll("'", "\\'") };
     });
-    source = source.replace(/(plant_9: 'Plume',\r?\n)(};)/, `$1${names.map(family => `    ${family.plantType}: '${family.escaped}',\n`).join('')}$2`);
-    mapper = mapper.replace(/(plant_9: 'Plume')(?=\s*})/, `$1, ${names.map(family => `${family.plantType}: '${family.escaped}'`).join(', ')}`);
-    need(source.includes(names.at(-1).plantType) && mapper.includes(names.at(-1).plantType), 'Could not update both plant-name registries.');
+    const sourcePattern = /(\r?\n)(};\r?\n\r?\n\/\*\* A plant type's name\.)/;
+    const mapperPattern = /(const PLANTS = \{[^\r\n]*?)(\s*};)/;
+    need(sourcePattern.test(source) && mapperPattern.test(mapper), 'Could not locate both plant-name registries.');
+    source = source.replace(sourcePattern, (_, eol, tail) => `${eol}${names.map(family => `    ${family.plantType}: '${family.escaped}',`).join(eol)}${eol}${tail}`);
+    mapper = mapper.replace(mapperPattern, (_, list, tail) => `${list}, ${names.map(family => `${family.plantType}: '${family.escaped}'`).join(', ')}${tail}`);
     for (const item of additions) {
         const target = resolve(root, item.path);
         mkdirSync(dirname(target), { recursive: true });

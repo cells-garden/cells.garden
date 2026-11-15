@@ -5,7 +5,7 @@ import { discoverReadyPlants } from './import-figma-plants.mjs';
 function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plantNo = 10 } = {}) {
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 12, height: 8 };
     const bloom = { id: '10:2', type: 'COMPONENT', name: 'Part=Flowers, Variant=flower1', width: 10, height: 9 };
-    const family = { id: '10:0', type: 'FRAME', name: 'Source/Plants/Fern', devStatus: status ? { type: status } : null, children: flower ? [stem, bloom] : [stem] };
+    const family = { id: '10:0', type: 'COMPONENT_SET', name: 'Source/Plants/Fern', devStatus: status ? { type: status } : null, children: flower ? [stem, bloom] : [stem] };
     const exports = [
         { id: '20:1', type: 'INSTANCE', name: `src/assets/pack/plant_${plantNo}/stem/stem1.png`, componentId: linked ? stem.id : '99:99', width: 12, height: 8 },
         ...(flower ? [{ id: '20:2', type: 'INSTANCE', name: `src/assets/pack/plant_${plantNo}/flowers/flower1.png`, componentId: bloom.id, width: 10, height: 9 }] : []),
@@ -64,7 +64,7 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
     const flowerBytes = readFileSync(resolve(sourceRoot, 'src/assets/pack/plant_9/flowers/flower_1.png'));
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: stemBytes.readUInt32BE(16), height: stemBytes.readUInt32BE(20) };
     const flower = { id: '10:2', type: 'COMPONENT', name: 'Part=Flowers, Variant=flower1', width: flowerBytes.readUInt32BE(16), height: flowerBytes.readUInt32BE(20) };
-    const family = { id: '10:0', type: 'FRAME', name: 'Source/Plants/Fern', devStatus: { type: 'READY_FOR_DEV' }, children: [stem, flower] };
+    const family = { id: '10:0', type: 'COMPONENT_SET', name: 'Source/Plants/Fern', devStatus: { type: 'READY_FOR_DEV' }, children: [stem, flower] };
     const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family, { id: '186:410', name: 'EXPORTS', children: [
         { id: '20:1', type: 'INSTANCE', name: 'src/assets/pack/plant_10/stem/stem1.png', componentId: stem.id, width: stem.width, height: stem.height },
         { id: '20:2', type: 'INSTANCE', name: 'src/assets/pack/plant_10/flowers/flower1.png', componentId: flower.id, width: flower.width, height: flower.height },
@@ -84,4 +84,41 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
     assert.equal(index.assets.length, 2);
     assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_10: 'Fern'/);
     assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_10: 'Fern'/);
+    const second = structuredClone(file);
+    const oak = structuredClone(family);
+    oak.name = 'Source/Plants/Oak';
+    oak.id = '11:0';
+    oak.children[0].id = '11:1';
+    oak.children[1].id = '11:2';
+    second.document.children[0].children.unshift(oak);
+    second.document.children[0].children.at(-1).children.push(
+        { id: '21:1', type: 'INSTANCE', name: 'src/assets/pack/plant_11/stem/stem1.png', componentId: '11:1', width: stem.width, height: stem.height },
+        { id: '21:2', type: 'INSTANCE', name: 'src/assets/pack/plant_11/flowers/flower1.png', componentId: '11:2', width: flower.width, height: flower.height }
+    );
+    const png = bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const nextReplies = [
+        { ok: true, json: async () => second },
+        { ok: true, json: async () => ({ images: { '21:1': 'https://img/3', '21:2': 'https://img/4' } }) },
+        { ok: true, arrayBuffer: async () => png(stemBytes) },
+        { ok: true, arrayBuffer: async () => png(flowerBytes) },
+    ];
+    const nextResult = await importReadyPlants({ token: 'test-token', root, fetcher: async () => nextReplies.shift() });
+    assert.deepEqual(nextResult.imported, [{ plantType: 'plant_11', name: 'Oak', sprites: 2 }]);
+    assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_11: 'Oak'/);
+    assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_11: 'Oak'/);
+    const retry = await importReadyPlants({ token: 'test-token', root, fetcher: async () => ({ ok: true, json: async () => second }) });
+    assert.deepEqual(retry, { imported: [], unchanged: true });
+});
+
+test('a Ready-for-dev component set already fully registered is skipped', () => {
+    const registered = { assets: [
+        { path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' },
+        { path: 'src/assets/pack/plant_10/flowers/flower1.png', sourceNodeId: '10:2' },
+    ] };
+    assert.deepEqual(discoverReadyPlants(fixture(), registered, ['plant_9', 'plant_10']), []);
+});
+
+test('a partially registered Ready-for-dev component set is rejected', () => {
+    const registered = { assets: [{ path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' }] };
+    assert.throws(() => discoverReadyPlants(fixture(), registered, ['plant_10']), /Partially imported plant family/);
 });

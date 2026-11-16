@@ -40,6 +40,12 @@ test('reconciled non-manifest assets use their actual linked exports', () => {
     }
 });
 
+test('direct Figma image layers retain their own names and dimensions', () => {
+    const source = { exportNodeId: '30:1', exportName: 'stem4 1', width: 37, height: 14 };
+    validateExport(context('<rounded-rectangle id="30:1" name="stem4 1" width="37" height="14" />'), source);
+    assert.throws(() => validateExport(context('<rounded-rectangle id="30:1" name="stem4 2" width="37" height="14" />'), source), /does not match/);
+});
+
 test('source-only fallback keeps a complete source pair and rejects partial export mappings', () => {
     const source = { path: 'src/assets/source-only.png', sourceNodeId: '1:2', sourceName: 'Source/Test', exportNodeId: null, exportName: null };
     const resolved = assetByName('source-only', [source]);

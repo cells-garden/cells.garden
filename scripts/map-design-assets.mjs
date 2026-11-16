@@ -162,7 +162,7 @@ export function buildCoverage(inventory, nodes, mappings, previousReports = []) 
             sourceName: source?.name ?? null,
             ...(source ? { sourceWidth: source.width, sourceHeight: source.height } : {}),
             exportNodeId: known?.exportNodeId ?? mapping?.exportNodeId ?? null,
-            exportName: known ? known.path : mapping?.exportName ?? null,
+            exportName: known ? known.exportName ?? known.path : mapping?.exportName ?? null,
             figmaSha256: digest,
             evidence: digest ? 'image-bytes' : source ? 'named-source-only' : 'not-established',
         };

@@ -17,6 +17,48 @@ function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plant
 
 const index = { assets: [] };
 
+function looseFixture({ status = 'READY_FOR_DEV', flowers = true } = {}) {
+    const stem1 = { id: '30:1', type: 'RECTANGLE', name: 'stem4 1', width: 37, height: 14 };
+    const stem2 = { id: '30:2', type: 'RECTANGLE', name: 'stem3 1', width: 37, height: 14 };
+    const flower = { id: '30:3', type: 'RECTANGLE', name: 'flower2 1', width: 21, height: 11 };
+    const family = {
+        id: '30:0', type: 'FRAME', name: 'Source/Plants/Leafy', devStatus: status ? { type: status } : null,
+        children: [
+            { id: '30:4', type: 'COMPONENT', name: 'Stem', children: [stem1, stem2] },
+            ...(flowers ? [{ id: '30:5', type: 'COMPONENT', name: 'Flowers', children: [flower] }] : []),
+        ],
+    };
+    return { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family] }] } };
+}
+
+test('finds individual Figma image layers without EXPORTS copies', () => {
+    const file = looseFixture();
+    const parts = discoverReadyPlants(file, index, ['plant_9'])[0].parts;
+    assert.deepEqual(parts.map(p => [p.path, p.sourceNodeId, p.exportNodeId]), [
+        ['src/assets/pack/plant_10/stem/stem4.png', '30:1', '30:1'],
+        ['src/assets/pack/plant_10/stem/stem3.png', '30:2', '30:2'],
+        ['src/assets/pack/plant_10/flowers/flower2.png', '30:3', '30:3'],
+    ]);
+});
+
+test('does not import incomplete or already imported loose artwork', () => {
+    assert.deepEqual(discoverReadyPlants(looseFixture({ status: null, flowers: false }), index), []);
+    assert.throws(() => discoverReadyPlants(looseFixture({ flowers: false }), index), /stem and one flower/);
+    const sourceIds = ['30:1', '30:2', '30:3'];
+    const published = { assets: sourceIds.map(sourceNodeId => ({ sourceNodeId })) };
+    assert.deepEqual(discoverReadyPlants(looseFixture(), published, ['plant_10']), []);
+    assert.throws(() => discoverReadyPlants(looseFixture(), { assets: [{ sourceNodeId: '30:1' }] }), /Partially registered/);
+});
+
+test('recognizes component sets and rejects duplicate sprite variants', () => {
+    const file = looseFixture();
+    const family = file.document.children[0].children[0];
+    family.type = 'COMPONENT_SET';
+    assert.equal(discoverReadyPlants(file, index, ['plant_9'])[0].displayName, 'Leafy');
+    family.children[0].children.push({ id: '30:6', type: 'RECTANGLE', name: 'stem4 2', width: 37, height: 14 });
+    assert.throws(() => discoverReadyPlants(file, index, ['plant_9']), /Duplicate sprite path/);
+});
+
 test('discovers only complete families marked Ready for dev', () => {
     const found = discoverReadyPlants(fixture(), index, ['plant_9']);
     assert.equal(found.length, 1);

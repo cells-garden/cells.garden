@@ -135,7 +135,7 @@ export function imageUrl(context) {
 
 export function validateExport(metadata, asset) {
     const xml = metadata.content?.filter(item => item.type === 'text').map(item => item.text).join('\n') || '';
-    const tag = xml.match(/<(?:frame|instance|symbol)\b[^>]*>/)?.[0] || '';
+    const tag = xml.match(/<(?:frame|instance|symbol|rounded-rectangle|rectangle)\b[^>]*>/)?.[0] || '';
     for (const [key, value] of Object.entries({ id: asset.exportNodeId, name: asset.exportName ?? asset.path, width: asset.width, height: asset.height })) {
         requireThat(tag.includes(`${key}="${value}"`), `Export ${key} does not match the manifest. Open the correct master file; do not remap by guesswork.`);
     }

@@ -15,40 +15,59 @@ function walk(node, result = []) {
     return result;
 }
 
+function plantParts(family) {
+    const parts = [];
+    for (const child of family.children || []) {
+        const named = /^Part=(Stem|Flowers), Variant=(stem\d+|flower\d+)$/.exec(child.name || '');
+        if (child.type === 'COMPONENT' && named) {
+            parts.push({ source: child, category: named[1] === 'Stem' ? 'stem' : 'flowers', variant: named[2] });
+            continue;
+        }
+        const group = /^(Stem|Flowers?)$/i.exec(child.name || '');
+        if (!group) continue;
+        const category = /^Stem$/i.test(group[1]) ? 'stem' : 'flowers';
+        for (const source of walk(child).slice(1)) {
+            const match = /^(stem|flower)(\d+)(?: \d+)?$/i.exec(source.name || '');
+            if (!match) continue;
+            const variantCategory = match[1].toLowerCase() === 'stem' ? 'stem' : 'flowers';
+            need(variantCategory === category, `Sprite ${source.name} is in the wrong group: ${family.name}`);
+            parts.push({ source, category, variant: `${match[1].toLowerCase()}${Number(match[2])}` });
+        }
+    }
+    return parts;
+}
+
 export function discoverReadyPlants(file, index, existingFolders = []) {
     const pages = file.document?.children || [];
     const page = pages.find(node => node.id === '27:1966' || node.name === 'ASSETS');
     need(page, 'Figma ASSETS page not found.');
     const exportSection = walk(page).find(node => node.id === '186:410' || node.name === 'EXPORTS');
-    need(exportSection, 'Figma EXPORTS section not found.');
-    const exports = new Map(walk(exportSection).map(node => [node.name, node]));
+    const exports = new Map(exportSection ? walk(exportSection).map(node => [node.name, node]) : []);
     const existing = new Set([...existingFolders, ...index.assets.map(asset => /^src\/assets\/pack\/(plant_\d+)\//.exec(asset.path)?.[1]).filter(Boolean)]);
     const nextNumber = Math.max(0, ...[...existing].map(name => Number(/^plant_(\d+)$/.exec(name)?.[1] || 0))) + 1;
     const knownSources = new Set(index.assets.map(asset => asset.sourceNodeId).filter(Boolean));
-    const families = walk(page).filter(node => (node.type === 'FRAME' || node.type === 'COMPONENT_SET') && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV').filter(family => {
-        const components = (family.children || []).filter(node => node.type === 'COMPONENT');
-        const mappedCount = components.filter(component => knownSources.has(component.id)).length;
-        need(!mappedCount || mappedCount === components.length, `Partially registered plant family: ${family.name}`);
-        return !mappedCount;
-    });
-    return families.map((family, offset) => {
+    const families = walk(page).filter(node => (node.type === 'FRAME' || node.type === 'COMPONENT_SET')
+        && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV')
+        .map(family => ({ family, sources: plantParts(family) }))
+        .filter(({ family, sources }) => {
+            const mappedCount = sources.filter(part => knownSources.has(part.source.id)).length;
+            need(!mappedCount || mappedCount === sources.length, `Partially registered plant family: ${family.name}`);
+            return !mappedCount;
+        });
+    return families.map(({ family, sources }, offset) => {
         const displayName = family.name.slice('Source/Plants/'.length).trim();
         need(displayName && !/[\\/:*?"<>|]/.test(displayName), `Invalid plant family name: ${family.name}`);
-        const components = (family.children || []).filter(node => node.type === 'COMPONENT');
-        const parts = components.map(source => {
-            const match = /^Part=(Stem|Flowers), Variant=(stem\d+|flower\d+)$/.exec(source.name || '');
-            need(match, `Unexpected plant component name: ${source.name}`);
-            const [, group, variant] = match;
-            const category = group === 'Stem' ? 'stem' : 'flowers';
-            const expectedPrefix = category === 'stem' ? 'stem' : 'flower';
-            need(variant.startsWith(expectedPrefix), `Variant/category mismatch: ${source.name}`);
+        const parts = sources.map(({ source, category, variant }) => {
             const path = `src/assets/pack/plant_${nextNumber + offset}/${category}/${variant}.png`;
             const exported = exports.get(path);
-            need(exported, `Missing linked EXPORTS instance: ${path}`);
-            need(exported.type === 'INSTANCE' && exported.componentId === source.id, `EXPORTS instance does not reference ${source.name}: ${path}`);
-            need(exported.width === source.width && exported.height === source.height && source.width > 0 && source.height > 0,
-                `Native dimensions differ for ${path}`);
-            return { path, category, variant, sourceNodeId: source.id, sourceName: source.name, width: source.width, height: source.height, exportNodeId: exported.id };
+            if (exported) need(exported.type === 'INSTANCE' && exported.componentId === source.id
+                && exported.width === source.width && exported.height === source.height,
+                `EXPORTS instance does not reference ${source.name} at its native size: ${path}`);
+            need(Number.isInteger(source.width) && Number.isInteger(source.height) && source.width > 0 && source.height > 0,
+                `Invalid native dimensions for ${path}`);
+            return { path, category, variant, sourceNodeId: source.id, sourceName: source.name,
+                width: source.width, height: source.height, exportNodeId: exported?.id ?? source.id,
+                exportName: exported ? path : source.name };
         });
         need(parts.some(part => part.category === 'stem') && parts.some(part => part.category === 'flowers'),
             `Plant family must contain at least one stem and one flower: ${displayName}`);
@@ -88,7 +107,7 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
             path: part.path, format: 'png', width: part.width, height: part.height, sha256: sha256(bytes),
             status: 'unverified', sourceNodeId: part.sourceNodeId, sourceName: part.sourceName,
             sourceWidth: part.width, sourceHeight: part.height, exportNodeId: part.exportNodeId,
-            exportName: part.path, figmaSha256: null, evidence: null, figmaImageSha1: null,
+            exportName: part.exportName, figmaSha256: null, evidence: null, figmaImageSha1: null,
         };
         additions.push({ ...part, bytes, entry });
     }

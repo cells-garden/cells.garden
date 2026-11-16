@@ -25,7 +25,7 @@ export function discoverReadyPlants(file, index, existingFolders = []) {
     const existing = new Set([...existingFolders, ...index.assets.map(asset => /^src\/assets\/pack\/(plant_\d+)\//.exec(asset.path)?.[1]).filter(Boolean)]);
     const nextNumber = Math.max(0, ...[...existing].map(name => Number(/^plant_(\d+)$/.exec(name)?.[1] || 0))) + 1;
     const knownSources = new Set(index.assets.map(asset => asset.sourceNodeId).filter(Boolean));
-    const families = walk(page).filter(node => node.type === 'FRAME' && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV').filter(family => {
+    const families = walk(page).filter(node => (node.type === 'FRAME' || node.type === 'COMPONENT_SET') && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV').filter(family => {
         const components = (family.children || []).filter(node => node.type === 'COMPONENT');
         const mappedCount = components.filter(component => knownSources.has(component.id)).length;
         need(!mappedCount || mappedCount === components.length, `Partially registered plant family: ${family.name}`);

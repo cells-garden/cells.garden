@@ -28,6 +28,12 @@ test('discovers only complete families marked Ready for dev', () => {
     ]);
 });
 
+test('discovers Ready-for-dev component set families', () => {
+    const file = fixture();
+    file.document.children[0].children[0].type = 'COMPONENT_SET';
+    assert.equal(discoverReadyPlants(file, index, ['plant_9'])[0]?.plantType, 'plant_10');
+});
+
 test('ignores families without Ready for dev status', () => {
     assert.deepEqual(discoverReadyPlants(fixture({ status: null }), index, ['plant_9']), []);
 });

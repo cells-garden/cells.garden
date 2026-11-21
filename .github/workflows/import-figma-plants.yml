@@ -28,7 +28,9 @@ jobs:
       - name: Import plants marked Ready for dev in Figma
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-        run: node scripts/import-figma-plants.mjs
+        run: |
+          node scripts/import-figma-plants.mjs > "$RUNNER_TEMP/figma-import.json"
+          cat "$RUNNER_TEMP/figma-import.json"
       - name: Publish new plant assets to dev
         run: |
           if [ -z "$(git status --porcelain)" ]; then
@@ -43,5 +45,7 @@ jobs:
           npm run lint
           npm run test:design
           npm run build:web
-          git commit -m "Import Figma plants marked Ready for dev"
+          # The commit title is what the site's "What's new" shows.
+          title="$(node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const n = (r.imported || []).map(p => p.name); console.log(n.length === 1 ? "New plant: " + n[0] : n.length ? "New plants: " + n.slice(0, -1).join(", ") + " and " + n[n.length - 1] : "Import Figma plants marked Ready for dev")' "$RUNNER_TEMP/figma-import.json")"
+          git commit -m "$title" -m "Imported from Figma, where it was marked Ready for dev."
           git push origin HEAD:dev

@@ -27,7 +27,7 @@
     "design:map": "node scripts/map-design-assets.mjs --offline",
     "test:design": "node --test scripts/design-assets.test.mjs scripts/map-design-assets.test.mjs scripts/design-delivery.test.mjs scripts/design-export.test.mjs scripts/design-dev.test.mjs scripts/design-bridge.test.mjs scripts/design-publish.test.mjs scripts/import-figma-plants.test.mjs",
     "test:design:preview": "node scripts/test-design-preview.mjs",
-    "test:unit": "node --import ./scripts/ts-resolve.mjs --test \"src/**/*.test.ts\"",
+    "test:unit": "node --import ./scripts/ts-resolve.mjs --test \"src/**/*.test.ts\" scripts/changelog.test.mjs",
     "test:web": "node scripts/test-web.mjs",
     "test:seo": "node scripts/test-seo.mjs",
     "test:ext": "node scripts/test-ext.mjs",

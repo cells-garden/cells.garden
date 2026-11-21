@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { collectChangelog } from './changelog.mjs';
 import { checkAndRecycleTutorial } from './test-tutorial.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,6 +36,11 @@ const PLANT_TYPES = readdirSync(PACK, { withFileTypes: true })
     .filter((d) => d.isDirectory() && (existsSync(join(PACK, d.name, 'stem')) || existsSync(join(PACK, d.name, 'flowers'))))
     .map((d) => d.name)
     .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+
+// "What's new" as the build has it: the same commits scripts/changelog.mjs gave
+// vite build, so its newest sha is the one the popup counts from.
+const CHANGELOG = await collectChangelog({ cwd: ROOT });
+const CHANGELOG_SEEN_KEY = 'cells.garden/changelog-seen'; // src/core/changelog.ts
 
 // Hosts the app talks to that a sandbox may block; failures to them are noise.
 const BLOCKED_HOSTS = /supabase\.co|google\.com/;
@@ -360,6 +366,70 @@ function stopPreview(child) {
 // ---------------------------------------------------------------------------
 // The scenario
 // ---------------------------------------------------------------------------
+
+/**
+ * Every context but changelogScenario's has already seen "What's new", so the
+ * popup never covers what a scenario clicks. Returns the unmarked newContext.
+ */
+function changelogSeenByDefault(browser) {
+    const seen = (ctx) => ctx.addInitScript(({ key, sha }) => {
+        try { if (!localStorage.getItem(key)) localStorage.setItem(key, sha); } catch { /* no storage */ }
+    }, { key: CHANGELOG_SEEN_KEY, sha: CHANGELOG.entries[0]?.sha ?? '' });
+    const newContext = browser.newContext.bind(browser);
+    const newPage = browser.newPage.bind(browser);
+    browser.newContext = async (...args) => {
+        const ctx = await newContext(...args);
+        await seen(ctx);
+        return ctx;
+    };
+    browser.newPage = async (...args) => {
+        const page = await newPage(...args);
+        await seen(page.context());
+        return page;
+    };
+    return newContext;
+}
+
+/**
+ * "What's new" (src/web/changelog.ts): nothing on a first visit, the changes
+ * since the last visit on a return, and gone for good after "Nice".
+ */
+async function changelogScenario(newContext, errors) {
+    const { entries } = CHANGELOG;
+    assert(entries.length > 0, 'the build carries at least the commit it was built from');
+    const ctx = await newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, colorScheme: 'dark' });
+    const page = await ctx.newPage();
+    watchErrors(page, 'changelog', errors);
+    const settle = async () => {
+        await page.waitForFunction(() => !!window.garden);
+        await page.waitForTimeout(1500);
+    };
+    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await settle();
+    assert.equal(await page.locator('.garden-changelog-modal').count(), 0, "a first visit has no What's new");
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), CHANGELOG_SEEN_KEY), entries[0].sha, 'a first visit counts from the newest change');
+
+    // Back after one more deploy (or, with a one-commit history, after a long time away).
+    const older = entries[1]?.sha ?? 'a-deploy-long-gone';
+    await page.evaluate(({ key, sha }) => localStorage.setItem(key, sha), { key: CHANGELOG_SEEN_KEY, sha: older });
+    await page.reload({ waitUntil: 'networkidle' });
+    const modal = page.locator('.garden-changelog-modal');
+    await modal.waitFor({ timeout: 5000 });
+    assert.equal(await modal.locator('h2').textContent(), "What's new");
+    const titles = await modal.locator('.garden-changelog li span').allTextContents();
+    assert.deepEqual(titles, entries[1] ? [entries[0].title] : entries.slice(0, 6).map(e => e.title), 'only what is new since the last visit');
+    const box = await modal.boundingBox();
+    assert(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844, 'the popup fits a phone');
+    await shot(page, '21-whats-new-phone.png');
+    await modal.getByRole('button', { name: 'Nice' }).click();
+    await modal.waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), CHANGELOG_SEEN_KEY), entries[0].sha);
+    await page.reload({ waitUntil: 'networkidle' });
+    await settle();
+    assert.equal(await page.locator('.garden-changelog-modal').count(), 0, 'shown once, not again');
+    await ctx.close();
+    console.log(`What's new: ${titles.length} shown of ${entries.length}, newest "${entries[0].title}"`);
+}
 
 async function routeScenario(browser, errors) {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -2152,12 +2222,15 @@ try {
     ensureBuild();
     preview = await startPreview();
     browser = await chromium.launch();
+    const unmarkedContext = changelogSeenByDefault(browser);
     await legacyTutorialScenario(browser, errors);
     await routeScenario(browser, errors);
     await scenario(browser, errors);
+    await changelogScenario(unmarkedContext, errors);
     if (supabaseUrl()) {
         // The full Chromium in headless mode: the lighter headless shell has no notifications to show a push with.
         const full = await chromium.launch({ channel: 'chromium' });
+        changelogSeenByDefault(full);
         try {
             await legacyTutorialScenario(full, errors, true);
             await accountRouteScenario(full, errors);

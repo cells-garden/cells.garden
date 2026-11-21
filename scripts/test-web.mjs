@@ -34,7 +34,7 @@ const PACK = join(ROOT, 'src', 'assets', 'pack');
 const PLANT_TYPES = readdirSync(PACK, { withFileTypes: true })
     .filter((d) => d.isDirectory() && (existsSync(join(PACK, d.name, 'stem')) || existsSync(join(PACK, d.name, 'flowers'))))
     .map((d) => d.name)
-    .sort();
+    .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
 
 // Hosts the app talks to that a sandbox may block; failures to them are noise.
 const BLOCKED_HOSTS = /supabase\.co|google\.com/;

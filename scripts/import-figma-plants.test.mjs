@@ -142,7 +142,12 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const sourceRoot = process.cwd();
     for (const path of ['design', 'src/core', 'scripts', 'src/assets/pack/plant_9/stem', 'src/assets/pack/plant_9/flowers']) mkdirSync(resolve(root, path), { recursive: true });
-    for (const path of ['src/core/assets.ts', 'scripts/map-design-assets.mjs']) writeFileSync(resolve(root, path), readFileSync(resolve(sourceRoot, path)));
+    // Pin the copied registries to plant_1–plant_9, so plants imported into the real repo later
+    // (plant_10 Leafy onwards) do not collide with this fixture's plant_10 and plant_11.
+    const pinRegistry = text => text
+        .replace(/^[ \t]*plant_(\d+): '(?:[^'\\]|\\.)*',\r?\n/gm, (line, n) => Number(n) > 9 ? '' : line)
+        .replace(/, plant_(\d+): '(?:[^'\\]|\\.)*'/g, (entry, n) => Number(n) > 9 ? '' : entry);
+    for (const path of ['src/core/assets.ts', 'scripts/map-design-assets.mjs']) writeFileSync(resolve(root, path), pinRegistry(readFileSync(resolve(sourceRoot, path), 'utf8')));
     const stemBytes = readFileSync(resolve(sourceRoot, 'src/assets/pack/plant_9/stem/Stem_1.png'));
     const flowerBytes = readFileSync(resolve(sourceRoot, 'src/assets/pack/plant_9/flowers/flower_1.png'));
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: stemBytes.readUInt32BE(16), height: stemBytes.readUInt32BE(20) };

@@ -44,7 +44,7 @@ export const PLANT_TYPES: string[] = Array.from(
             .filter(parts => parts.length === 2 && (parts[1] === 'stem' || parts[1] === 'flowers'))
             .map(parts => parts[0])
     )
-).sort();
+).sort((a, b) => a.localeCompare(b, 'en', { numeric: true })); // plant_10 after plant_9, not after plant_1
 
 /** Product labels for the bundled plant types. */
 export const PLANT_TYPE_NAMES: Readonly<Record<string, string>> = {

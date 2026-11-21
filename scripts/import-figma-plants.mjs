@@ -15,12 +15,25 @@ function walk(node, result = []) {
     return result;
 }
 
+/** "Part=Stem, Variant=stem1" in either property order, as Figma names variants after the set's property order. */
+function variantProps(name) {
+    const pairs = name.split(',').map(pair => /^\s*([^=]+?)\s*=\s*(.+?)\s*$/.exec(pair));
+    if (pairs.some(pair => !pair)) return null;
+    const props = Object.fromEntries(pairs.map(pair => [pair[1], pair[2]]));
+    const part = /^(Stem|Flowers?)$/i.exec(props.Part || '');
+    const variant = /^(stem|flower)_?(\d+)$/i.exec(props.Variant || '');
+    return part && variant ? {
+        category: /^Stem$/i.test(part[1]) ? 'stem' : 'flowers',
+        variant: `${variant[1].toLowerCase()}${Number(variant[2])}`,
+    } : null;
+}
+
 function plantParts(family) {
     const parts = [];
     for (const child of family.children || []) {
-        const named = /^Part=(Stem|Flowers), Variant=(stem\d+|flower\d+)$/.exec(child.name || '');
-        if (child.type === 'COMPONENT' && named) {
-            parts.push({ source: child, category: named[1] === 'Stem' ? 'stem' : 'flowers', variant: named[2] });
+        const named = child.type === 'COMPONENT' ? variantProps(child.name || '') : null;
+        if (named) {
+            parts.push({ source: child, ...named });
             continue;
         }
         const group = /^(Stem|Flowers?)$/i.exec(child.name || '');

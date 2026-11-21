@@ -76,6 +76,41 @@ test('discovers Ready-for-dev component set families', () => {
     assert.equal(discoverReadyPlants(file, index, ['plant_9'])[0]?.plantType, 'plant_10');
 });
 
+test('reads component-set variants whatever the property order', () => {
+    const variant = (id, name) => ({ id, type: 'COMPONENT', name, width: 37, height: 14 });
+    const family = { id: '471:446', type: 'COMPONENT_SET', name: 'Source/Plants/Leafy', devStatus: { type: 'READY_FOR_DEV' }, children: [
+        variant('469:441', 'Variant=stem2, Part=Stem'),
+        variant('471:442', 'Variant=stem1, Part=Stem'),
+        variant('471:466', 'Variant=flower1, Part=Flowers'),
+        variant('471:467', 'Part=Flowers, Variant=flower2'),
+    ] };
+    const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family] }] } };
+    const [found] = discoverReadyPlants(file, index, ['plant_9']);
+    assert.equal(found.displayName, 'Leafy');
+    assert.deepEqual(found.parts.map(part => [part.path, part.sourceNodeId]), [
+        ['src/assets/pack/plant_10/stem/stem2.png', '469:441'],
+        ['src/assets/pack/plant_10/stem/stem1.png', '471:442'],
+        ['src/assets/pack/plant_10/flowers/flower1.png', '471:466'],
+        ['src/assets/pack/plant_10/flowers/flower2.png', '471:467'],
+    ]);
+    family.devStatus = null;
+    assert.deepEqual(discoverReadyPlants(file, index, ['plant_9']), []);
+});
+
+test('an already imported family with Stem_1/flower_1 variants is recognized, not rejected', () => {
+    const variant = (id, name) => ({ id, type: 'COMPONENT', name, width: 39, height: 10 });
+    const family = { id: '296:415', type: 'COMPONENT_SET', name: 'Source/Plants/Plume', devStatus: { type: 'READY_FOR_DEV' }, children: [
+        variant('296:410', 'Part=Flowers, Variant=flower_1'),
+        variant('296:412', 'Part=Stem, Variant=Stem_1'),
+    ] };
+    const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family] }] } };
+    const published = { assets: [
+        { path: 'src/assets/pack/plant_9/flowers/flower_1.png', sourceNodeId: '296:410' },
+        { path: 'src/assets/pack/plant_9/stem/Stem_1.png', sourceNodeId: '296:412' },
+    ] };
+    assert.deepEqual(discoverReadyPlants(file, published, ['plant_9']), []);
+});
+
 test('ignores families without Ready for dev status', () => {
     assert.deepEqual(discoverReadyPlants(fixture({ status: null }), index, ['plant_9']), []);
 });

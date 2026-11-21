@@ -461,6 +461,9 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
         // try things in and the page that says what this is, after Sign in
         // (auth.ts puts it first). The rest of the menu comes with an account.
         // Tags stay while the garden has them, so hidden plants can come back.
+        // Export or import is among the rest, so the guide and the about page
+        // say a backup on the website comes with signing in; a new account
+        // starts with this browser's garden (the seed in openGarden above).
         if (!uid && routes) {
             return [
                 { label: 'Tutorial garden', onClick: () => location.assign('/tutorial') },

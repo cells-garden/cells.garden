@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { changelogPlugin } from './scripts/changelog.mjs';
 
 /**
  * The public Supabase values from .env* at the repo root plus the real
@@ -51,6 +52,8 @@ export default defineConfig(({ command, mode }) => {
             __CELLS_WEB_PUSH__: 'true',
         },
         plugins: [
+            // "What's new": the commits of the branch being built (scripts/changelog.mjs).
+            changelogPlugin({ cwd: fileURLToPath(new URL('.', import.meta.url)) }),
             // PWA: web manifest + Workbox service worker, so the garden installs on
             // a phone and opens offline. The manifest is generated here rather than
             // kept in public/, so the plugin precaches it and injects the <link>

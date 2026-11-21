@@ -6,7 +6,7 @@ Turn a task board into a pixel-art garden inside Obsidian. Each project is a pla
 
 Start with one idea. Add what it needs. Watch it take shape.
 
-Your first garden includes the original tutorial plant. Its cells explain the garden as you explore it. Existing users can choose **Add tutorial plant** from the garden menu, or open the separate [tutorial garden](https://cells.garden/tutorial) to practice without changing their own plants.
+Your first garden includes the original tutorial plant. Its cells explain the garden as you explore it. To practice without changing your own plants, open the separate [tutorial garden](https://cells.garden/tutorial), from the garden menu while signed out or at any time by its address.
 
 [Open the web app](https://cells.garden/) · [How it works](https://cells.garden/guide/) · [Chrome extension](https://cells.garden/chrome-extension/) · [Obsidian plugin](https://cells.garden/obsidian/)
 

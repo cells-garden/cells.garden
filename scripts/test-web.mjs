@@ -451,6 +451,18 @@ async function routeScenario(browser, errors) {
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForSelector('.kanban-empty-message');
     assert.equal(await page.locator('.project-column').count(), 0, 'removing the starter stays removed');
+    // Signed out on the web, the pill's menu is the way in and nothing else:
+    // Sign in, the practice garden and the about page.
+    if (await page.locator('.auth-pill').count()) {
+        await page.locator('.auth-pill').click();
+        await page.waitForSelector('.garden-context-menu');
+        assert.deepEqual(await pillMenu(page), ['Sign in', 'Tutorial garden', 'About'], 'the signed-out menu on the web');
+        await page.click(rowOf('Tutorial garden'));
+        await page.waitForURL('**/tutorial');
+        await page.waitForSelector('.seed-content');
+        await page.goBack({ waitUntil: 'networkidle' });
+        await page.waitForSelector('.kanban-empty-message');
+    }
 
     await page.goto(`${BASE}about/`, { waitUntil: 'networkidle' });
     await page.getByRole('heading', { level: 1, name: 'Give your projects a place to grow' }).waitFor();
@@ -1100,17 +1112,15 @@ async function scenario(browser, errors) {
     await page.waitForTimeout(400);
     const extras = await page.$$eval('.garden-items-layer, .garden-pets-layer, .garden-scene-item, .garden-pet', (els) => els.map((e) => e.className));
     assert(extras.length === 0, `items or pets drawn in a build without them: ${JSON.stringify(extras)}`);
+    // Signed out on the web, the pill offers neither Items nor Pets (nor
+    // Settings): they come with an account (the account scenario opens Pets).
+    // Tags stay while plants have them, so hidden ones can come back.
     if (await page.$('.auth-pill')) {
         await page.click('.auth-pill');
         await page.waitForSelector('.garden-context-menu');
-        const pill = await page.$$eval('.garden-context-menu .garden-menu-label', (els) => els.map((e) => e.textContent));
-        assert(!pill.includes('Items') && pill.includes('Pets'), `the pill menu offers Items, or lost Pets: ${JSON.stringify(pill)}`);
-        await page.click('.garden-context-menu .garden-menu-item:has(.garden-menu-label:text-is("Pets"))');
-        await page.waitForSelector('.modal .garden-tile');
-        const tiles = await page.$$eval('.modal .garden-tile', (els) => els.map((e) => [e.getAttribute('aria-label'), e.disabled]));
-        console.log('pets without extras:', tiles);
-        assert.deepEqual(tiles, [['Pumpkin, unavailable', true], ['Crow, unavailable', true]],
-            'the Pets menu shows what is coming, greyed out');
+        const tagged = await page.evaluate(() => window.garden.gardenData.some((p) => p.tags?.length));
+        const pill = await pillMenu(page);
+        assert.deepEqual(pill, ['Sign in', 'Tutorial garden', 'About', ...(tagged ? ['Tags'] : [])], `the signed-out pill menu: ${JSON.stringify(pill)}`);
         await page.keyboard.press('Escape');
     }
     await page.evaluate(() => window.garden.saveGardenData());
@@ -1716,6 +1726,8 @@ const DEE = '0b9c3a52-6f1e-4c7a-9d10-00000000000d';
 const GONE = '0b9c3a52-6f1e-4c7a-9d10-0000000000ff';
 const OWN_GARDEN = '5d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
 const SHARED_GARDEN = '5d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5c';
+/** The garden space the account scenario makes with the + in the pill's menu. */
+const SPACE = '5d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5d';
 const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
 function supabaseUrl() {
@@ -1776,6 +1788,10 @@ async function standInSupabase(ctx, withShared = false) {
         name: 'My garden',
         rev: 1,
         saves: 0,
+        /** Garden spaces the user made with the + in the pill's menu: { id, name, data, rev }. */
+        spaces: [],
+        /** Gardens the user left from the pill's menu. */
+        left: [],
         notified: [],
         marked: [],
         unknown: [],
@@ -1824,8 +1840,28 @@ async function standInSupabase(ctx, withShared = false) {
         if (path === '/rest/v1/rpc/save_push_subscription') return json(null);
         if (path === '/rest/v1/push_subscriptions' && req.method() === 'DELETE') return json(null);
         if (path === '/rest/v1/gardens') {
+            const space = state.spaces.find((s) => s.id === eq('id'));
+            if (req.method() === 'POST') {
+                // A new garden space (createSpace): nobody's own garden, owned by the user.
+                const row = JSON.parse(req.postData() ?? '{}');
+                if (row.owner_id !== ME || row.user_id !== null) return json({ message: 'not a space' }, 400);
+                const made = { id: SPACE, name: row.name, data: row.data, rev: 1 };
+                state.spaces.push(made);
+                return json([{ id: made.id, name: made.name }], 201);
+            }
+            if (req.method() === 'DELETE') {
+                // deleteSpace: only ever a space, never a row with a user_id.
+                if (space && url.searchParams.get('user_id') === 'is.null') state.spaces = state.spaces.filter((s) => s !== space);
+                else state.unknown.push(`DELETE ${path}${url.search}`);
+                return route.fulfill({ status: 204, headers });
+            }
             if (req.method() === 'PATCH') {
                 const patch = JSON.parse(req.postData() ?? '{}');
+                if (space) {
+                    if ('name' in patch) space.name = patch.name;
+                    else { space.data = patch.data; space.rev += 1; }
+                    return json('name' in patch ? [{ id: space.id }] : [{ rev: space.rev }]);
+                }
                 if ('name' in patch) { state.name = patch.name; return json([{ id: OWN_GARDEN }]); }
                 state.garden = patch.data;
                 state.rev += 1;
@@ -1833,16 +1869,31 @@ async function standInSupabase(ctx, withShared = false) {
                 return json([{ rev: state.rev }]);
             }
             if (select === 'id,data,updated_at,rev') {
+                if (space) return json([{ id: space.id, data: space.data, updated_at: space.data.updatedAt, rev: space.rev }]);
                 const shared = withShared && eq('id') === SHARED_GARDEN;
                 if (eq('id') && eq('id') !== OWN_GARDEN && !shared) return json([]);
                 const data = shared ? state.sharedGarden : state.garden;
                 return json([{ id: shared ? SHARED_GARDEN : OWN_GARDEN, data, updated_at: data.updatedAt, rev: state.rev }]);
             }
-            if (select === 'id,name') return json(eq('user_id') === ME ? [{ id: OWN_GARDEN, name: state.name }] : []);
-            if (select === 'user_id,owner_id') return json(eq('id') === OWN_GARDEN ? [{ user_id: ME, owner_id: null }] : []);
+            if (select === 'id,name') {
+                if (eq('owner_id') === ME) return json(state.spaces.map((s) => ({ id: s.id, name: s.name })));
+                return json(eq('user_id') === ME ? [{ id: OWN_GARDEN, name: state.name }] : []);
+            }
+            if (select === 'user_id,owner_id') {
+                if (space) return json([{ user_id: null, owner_id: ME }]);
+                return json(eq('id') === OWN_GARDEN ? [{ user_id: ME, owner_id: null }] : []);
+            }
         }
+        // A garden's link, asked by Share garden: none made yet.
+        if (path === '/rest/v1/garden_invites' && req.method() === 'GET') return json([]);
         if (path === '/rest/v1/garden_members') {
-            if (withShared && select.startsWith('garden_id,gardens')) return json([{
+            if (req.method() === 'DELETE') {
+                // Leave garden: the user takes themself out of it.
+                if (eq('user_id') === ME && eq('garden_id') === SHARED_GARDEN) state.left.push(SHARED_GARDEN);
+                else state.unknown.push(`DELETE ${path}${url.search}`);
+                return route.fulfill({ status: 204, headers });
+            }
+            if (withShared && !state.left.includes(SHARED_GARDEN) && select.startsWith('garden_id,gardens')) return json([{
                 garden_id: SHARED_GARDEN, gardens: { id: SHARED_GARDEN, name: 'Shared bed', user_id: ANA, owner_id: null },
             }]);
             if (select.startsWith('user_id,created_at,profiles')) {
@@ -1917,6 +1968,45 @@ function checkAssignees(geometry, label) {
 }
 
 const rowOf = (label) => `.garden-context-menu .garden-menu-item:has(.garden-menu-label:text-is("${label}"))`;
+/** A garden row's ⋯ in the pill's menu. */
+const moreFor = (name) => `.garden-context-menu .garden-menu-more[aria-label="More for ${name}"]`;
+/** An action in the garden actions open under a ⋯, never the same action of another garden's closed ones. */
+const actionOf = (label) => `.garden-context-menu .garden-menu-panel.is-open .garden-menu-item:has(.garden-menu-label:text-is("${label}"))`;
+
+/**
+ * The pill's menu as it reads from the top, a line for each row: a heading as
+ * "# Gardens", with its button as "# Gardens [New garden space]"; a row with
+ * actions behind a ⋯ as "My garden ⋯"; any other row by its label.
+ */
+function pillMenu(page) {
+    return page.$$eval('.garden-context-menu > :not(.garden-menu-panel)', (els) => els.map((el) => {
+        if (el.classList.contains('garden-menu-heading')) {
+            const button = el.querySelector('.garden-menu-heading-button');
+            const text = el.querySelector('.garden-menu-heading-text')?.textContent ?? el.textContent;
+            return `# ${text}${button ? ` [${button.getAttribute('aria-label')}]` : ''}`;
+        }
+        const label = el.querySelector('.garden-menu-label')?.textContent;
+        return el.classList.contains('garden-menu-split') ? `${label} ⋯` : label;
+    }));
+}
+
+/** What a garden's ⋯ says and holds: its actions, danger marked, and whether they are open under its row. */
+function actionsOf(page, name) {
+    return page.$eval(moreFor(name), (more) => {
+        const panel = document.getElementById(more.getAttribute('aria-controls'));
+        return {
+            expanded: more.getAttribute('aria-expanded'),
+            open: panel.classList.contains('is-open'),
+            openPanels: document.querySelectorAll('.garden-context-menu .garden-menu-panel.is-open').length,
+            // The ⋯ is a button beside the row's button, never inside it, and its actions follow the row.
+            beside: more.parentElement.classList.contains('garden-menu-split') && !more.closest('.garden-menu-item')
+                && more.previousElementSibling?.classList.contains('garden-menu-item'),
+            underRow: more.parentElement.nextElementSibling === panel,
+            actions: [...panel.querySelectorAll('.garden-menu-item')].map((b) => b.querySelector('.garden-menu-label').textContent
+                + (b.classList.contains('is-danger') ? ' (danger)' : '')),
+        };
+    });
+}
 
 async function accountRouteScenario(browser, errors) {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -1954,9 +2044,29 @@ async function accountRouteScenario(browser, errors) {
     await page.waitForURL(`**/garden/${SHARED_GARDEN}`);
     await page.getByText('Shared bed', { exact: true }).last().waitFor();
     assert.equal(await page.evaluate(() => localStorage.getItem('cells.garden/v1/pendingJoin')), null);
+    // A garden someone shared has one action behind its ⋯: leaving it. Left
+    // while it is on screen, your own garden takes its place.
+    await page.locator('.auth-pill').click();
+    await page.click(moreFor('Shared bed'));
+    assert.deepEqual(await actionsOf(page, 'Shared bed'), {
+        expanded: 'true', open: true, openPanels: 1, beside: true, underRow: true, actions: ['Leave garden (danger)'],
+    }, 'the ⋯ on a shared garden');
+    assert.deepEqual((await actionsOf(page, 'My garden')).actions, ['Rename garden', 'Share garden'], 'My garden\'s actions, from another garden');
+    await page.click(actionOf('Leave garden'));
+    await page.getByRole('heading', { name: 'Leave Shared bed?', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Leave', exact: true }).click();
+    await page.getByText('Left Shared bed.', { exact: true }).waitFor();
+    await page.waitForURL(`**/garden/${OWN_GARDEN}`);
+    await page.getByText('Tomatoes', { exact: true }).waitFor();
+    assert.deepEqual(state.left, [SHARED_GARDEN], 'leaving takes the user out of that garden');
+    await page.locator('.auth-pill').click();
+    await page.waitForSelector(moreFor('My garden'));
+    const afterLeaving = await pillMenu(page);
+    assert(afterLeaving.includes('My garden ⋯') && !afterLeaving.includes('Shared bed ⋯'), `a garden left is gone from the menu: ${JSON.stringify(afterLeaving)}`);
+    await page.keyboard.press('Escape');
     assert.deepEqual(state.unknown, []);
     await ctx.close();
-    console.log('Account routes: own/shared gardens, history, refresh, denied access, profiles and invite acceptance passed');
+    console.log('Account routes: own/shared gardens, history, refresh, denied access, profiles, invite acceptance and leaving passed');
 }
 
 async function accountScenario(browser, errors) {
@@ -2127,14 +2237,110 @@ async function accountScenario(browser, errors) {
     await page.waitForSelector('.garden-push-setting[data-state="off"]');
     assert.equal(await page.evaluate(() => window.__pushTest.removed), 1, 'turning off revokes the browser subscription');
     await page.keyboard.press('Escape');
-    // Garden names are saved separately from the task data and survive reload.
+
+    // The pill's menu, signed in: the gardens first, each with its own
+    // actions behind a ⋯ and a + to make another, then the rest. No tutorial
+    // rows, no New garden space row, no actions of their own.
     await page.click('.auth-pill');
-    await page.click(rowOf('Rename garden'));
+    await page.waitForSelector(moreFor('My garden'));
+    const signedIn = await pillMenu(page);
+    assert.deepEqual(signedIn, [
+        '# iver@example.com', '# Gardens [New garden space]', 'My garden ⋯', 'Notifications', 'Friends',
+        'My profile', 'Report issue', 'About', 'Export or import', 'Pets', 'Settings', 'Sign out',
+    ], `the signed-in pill menu: ${JSON.stringify(signedIn)}`);
+    assert(!signedIn.some((row) => ['Tutorial garden', 'Add tutorial plant', 'New garden space'].includes(row)), 'no tutorial or New garden space rows when signed in');
+    await shot(page, '21-pill-menu-desktop.png');
+    // Keys walk through the + and the ⋯ like any row: up from My garden is the
+    // +, down is its ⋯, and Enter on the ⋯ opens the actions with the focus on the first.
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent);
+    await page.focus(rowOf('My garden'));
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await focused(), 'New garden space');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'More for My garden');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await actionsOf(page, 'My garden'), {
+        expanded: 'true', open: true, openPanels: 1, beside: true, underRow: true, actions: ['Rename garden', 'Share garden'],
+    }, 'the ⋯ on My garden');
+    assert.equal(await focused(), 'Rename garden');
+    await shot(page, '22-pill-menu-garden-actions.png');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'Share garden');
+    await page.keyboard.press('ArrowUp');
+    // Garden names are saved separately from the task data and survive reload.
+    await page.keyboard.press('Enter');
     await page.getByRole('textbox', { name: 'Garden name' }).fill('Kitchen garden');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.auth-pill')?.textContent.includes('Kitchen garden'));
     assert.equal(state.name, 'Kitchen garden');
     assert(state.garden.projects.length > 0, 'renaming preserves the garden data');
+
+    // Pets wait for Max's approval: the menu shows what is coming, greyed out.
+    await page.click('.auth-pill');
+    await page.click(rowOf('Pets'));
+    await page.waitForSelector('.modal .garden-tile');
+    const tiles = await page.$$eval('.modal .garden-tile', (els) => els.map((e) => [e.getAttribute('aria-label'), e.disabled]));
+    console.log('pets without extras:', tiles);
+    assert.deepEqual(tiles, [['Pumpkin, unavailable', true], ['Crow, unavailable', true]],
+        'the Pets menu shows what is coming, greyed out');
+    await page.keyboard.press('Escape');
+
+    // The + after Gardens makes a garden space and opens it.
+    await page.click('.auth-pill');
+    await page.getByRole('button', { name: 'New garden space', exact: true }).click();
+    await page.getByRole('heading', { name: 'New garden space', exact: true }).waitFor();
+    await page.locator('.modal input').fill('Herb spiral');
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await page.waitForURL(`**/garden/${SPACE}`);
+    await page.waitForFunction(() => document.querySelector('.auth-pill')?.textContent.includes('Herb spiral'));
+    await page.getByText('Tutorial plant', { exact: true }).first().waitFor();
+    assert.deepEqual(state.spaces.map((s) => s.name), ['Herb spiral'], 'the + makes one space');
+    // Its ⋯ renames, shares or deletes it; renamed while on screen, the pill follows.
+    await page.click('.auth-pill');
+    await page.waitForSelector(moreFor('Herb spiral'));
+    assert.deepEqual(await pillMenu(page), [
+        '# iver@example.com', '# Gardens [New garden space]', 'My garden ⋯', 'Herb spiral ⋯', 'Notifications', 'Friends',
+        'My profile', 'Report issue', 'About', 'Export or import', 'Pets', 'Settings', 'Sign out',
+    ]);
+    await page.click(moreFor('Herb spiral'));
+    assert.deepEqual(await actionsOf(page, 'Herb spiral'), {
+        expanded: 'true', open: true, openPanels: 1, beside: true, underRow: true,
+        actions: ['Rename garden', 'Share garden', 'Delete garden space (danger)'],
+    }, 'the ⋯ on a garden space');
+    // One open at a time: My garden's ⋯ closes the space's.
+    await page.click(moreFor('My garden'));
+    assert.deepEqual([(await actionsOf(page, 'Herb spiral')).expanded, (await actionsOf(page, 'My garden')).openPanels], ['false', 1]);
+    await page.click(moreFor('Herb spiral'));
+    await page.click(actionOf('Rename garden'));
+    const spaceName = page.getByRole('textbox', { name: 'Garden name' });
+    assert.equal(await spaceName.inputValue(), 'Herb spiral', 'renaming starts from the space\'s name');
+    await spaceName.fill('Herb bed');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.auth-pill')?.textContent.includes('Herb bed'));
+    assert.equal(state.spaces[0].name, 'Herb bed');
+    assert.equal(state.name, 'Kitchen garden', 'renaming the space leaves My garden\'s name alone');
+    // A garden's ⋯ acts on that garden, not on the one on screen: My garden's
+    // Share garden, from inside the space, shares My garden and its people.
+    await page.click('.auth-pill');
+    await page.click(moreFor('My garden'));
+    await page.click(actionOf('Share garden'));
+    await page.getByRole('heading', { name: 'Share garden', exact: true }).waitFor();
+    await page.locator('.modal .share-people').getByText('Ana', { exact: true }).waitFor();
+    assert.equal(await page.locator('.modal input').first().inputValue(), 'Kitchen garden', 'Share garden from My garden\'s ⋯ shares My garden');
+    await page.keyboard.press('Escape');
+    // Deleting the space on screen leaves it for your own garden first.
+    await page.click('.auth-pill');
+    await page.click(moreFor('Herb bed'));
+    await page.click(actionOf('Delete garden space'));
+    await page.getByRole('heading', { name: 'Delete Herb bed?', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByText('Deleted Herb bed.', { exact: true }).waitFor();
+    await page.waitForURL(`**/garden/${OWN_GARDEN}`);
+    await page.waitForFunction(() => document.querySelector('.auth-pill')?.textContent.includes('Kitchen garden'));
+    await page.waitForSelector('.kanban-scroll-container .garden-item[data-id="m_me"]');
+    assert.deepEqual(state.spaces, [], 'the space is deleted');
+    assert(state.garden.projects.length === 2, 'the space never wrote into My garden');
 
     // Moving a cell changes its layer and completion status together.
     await page.click('.kanban-scroll-container .garden-item[data-id="m_me"]', { button: 'right' });
@@ -2188,6 +2394,26 @@ async function accountScenario(browser, errors) {
     const iphone = await assigneeGeometry(phone, ['f_one', 's_four', 's_plain', 's_long', 'r_gone', 'm_me']);
     checkAssignees(iphone, 'iPhone');
     await shot(phone, '15-assignees-iphone.png');
+    // A finger: the + and the ⋯ are 44px each, and a tap on a ⋯ opens its
+    // garden's actions without moving the focus into them, and without
+    // moving the row it belongs to.
+    await phone.click('.auth-pill');
+    await phone.waitForSelector(moreFor('My garden'));
+    const fingerTargets = await phone.$$eval('.garden-context-menu .garden-menu-more, .garden-context-menu .garden-menu-heading-button', (els) => els.map((e) => {
+        const r = e.getBoundingClientRect();
+        return { name: e.getAttribute('aria-label'), width: Math.round(r.width), height: Math.round(r.height) };
+    }));
+    assert(fingerTargets.length === 2 && fingerTargets.every((t) => t.width >= 44 && t.height >= 44), `the + and the ⋯ need 44px for a finger: ${JSON.stringify(fingerTargets)}`);
+    const rowBox = () => phone.$eval(rowOf('My garden'), (el) => { const r = el.getBoundingClientRect(); return { left: r.left, width: r.width }; });
+    const rowBefore = await rowBox();
+    await phone.tap(moreFor('My garden'));
+    const fingerActions = await actionsOf(phone, 'My garden');
+    assert(fingerActions.open && fingerActions.expanded === 'true' && fingerActions.actions.join() === 'Rename garden,Share garden', `a tap on the ⋯ opens the actions: ${JSON.stringify(fingerActions)}`);
+    assert.equal(await phone.evaluate(() => !!document.activeElement?.closest('.garden-menu-panel')), false, 'a tap leaves the focus out of the actions');
+    assert.deepEqual(await rowBox(), rowBefore, 'the row stays put as its actions open');
+    await shot(phone, '23-pill-menu-iphone.png');
+    await phone.keyboard.press('Escape');
+    await phone.waitForFunction(() => !document.querySelector('.garden-context-menu'));
     await phone.click('.auth-pill');
     await phone.click(rowOf('Settings'));
     await phone.waitForSelector('.garden-push-setting[data-state]');

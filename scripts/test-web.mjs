@@ -4,7 +4,8 @@
 // Starts "vite preview" on port 4173 (TEST_WEB_PORT overrides it, so two
 // checkouts can test at once) against dist/ (building first when dist/
 // is missing) and drives the garden with Playwright: plants seeds, adds cells
-// to every zone, context menus, pan/zoom, reload persistence, the part a hover
+// to every zone, context menus, a plant's description and tags under its name,
+// pan/zoom, reload persistence, the part a hover
 // or a click means, one part's chip with the board hidden (hover, click, tap
 // and hold, through a sync and a zoom), a mobile viewport with pan view and the
 // calm click flash. Then the PWA: the manifest and sw.js are served, the service
@@ -66,6 +67,26 @@ function watchErrors(page, label, errors) {
         if (isBlockedNetworkNoise(m.text(), m.location()?.url)) return;
         errors.push(`${label} console: ${m.text()}`);
     });
+}
+
+/**
+ * What a seed cell shows under its name (garden.ts, createSeedMeta), counting
+ * only what is on screen. Runs in the page, given the cell's selector.
+ */
+function seedMetaOf(selector) {
+    const cell = document.querySelector(selector);
+    const shown = (el) => !!el && el.getClientRects().length > 0;
+    return {
+        active: !!cell?.classList.contains('is-active'),
+        meta: shown(cell?.querySelector('.seed-meta')),
+        description: shown(cell?.querySelector('.seed-description')) ? cell.querySelector('.seed-description').textContent : null,
+        addDescription: shown(cell?.querySelector('.seed-description-add')),
+        tags: [...(cell?.querySelectorAll('.seed-tag') ?? [])].filter(shown).map((chip) => chip.dataset.tag),
+        removable: [...(cell?.querySelectorAll('.seed-tag-remove') ?? [])].filter(shown).map((b) => b.getAttribute('aria-label')),
+        addTag: shown(cell?.querySelector('.seed-tag-add')),
+        field: cell?.querySelector('input')?.className ?? null,
+        focused: document.activeElement?.className ?? null,
+    };
 }
 
 /** A cell's menu: another of its kind first; in a build with accounts, Assign follows the highlight. */
@@ -701,7 +722,8 @@ async function scenario(browser, errors) {
     await openPlantMenu();
     const plantMenu = await page.$$eval('.garden-context-menu > .garden-menu-item .garden-menu-label', (els) => els.map((e) => e.textContent));
     console.log('plant menu:', plantMenu);
-    assert.deepEqual(plantMenu, ['Add', 'Standby', 'Plant type', 'Seed', 'Tags', 'Plant hue', 'Recycle plant']);
+    // Tags are written under the plant's name now (below), not in its menu.
+    assert.deepEqual(plantMenu, ['Add', 'Standby', 'Plant type', 'Seed', 'Plant hue', 'Recycle plant']);
 
     // Plant type: every type, one stem each, the very sprite the plant's first stem becomes.
     await page.click(menuRow('Plant type'));
@@ -784,46 +806,168 @@ async function scenario(browser, errors) {
         `Escape should put the hue back: ${JSON.stringify(hue)}`);
     assert((await stored(plantId)).hue === 200, 'Escape must not keep the previewed hue');
 
-    // Tags: a plant's menu puts them on it; hiding one takes every plant with
-    // it out of the garden and off the board, on this device only, and the
-    // board says so and brings them back. The pill menu hides and shows too.
+    // Under a plant's name, on the board itself: a short description and its
+    // tags. A plain plant shows nothing there; selecting its name offers "Add a
+    // description" and "+ tag", each written in place and saved at once, and a
+    // press outside the cell puts it back. Hiding a tag (the pill menu) takes
+    // every plant with it out of the garden and off the board, on this device
+    // only, and the board says so and brings them back.
     const plantsShown = () => page.evaluate(() => ({
         garden: [...document.querySelectorAll('.garden-plant-wrapper')].map((w) => w.dataset.projectId),
         board: [...document.querySelectorAll('.kanban-scroll-container > .project-column')].map((c) => c.dataset.projectId),
         note: document.querySelector('.kanban-hidden-note')?.textContent ?? null,
     }));
+    const column = (id) => `.kanban-scroll-container > .project-column[data-project-id="${id}"]`;
+    const seedCell = `${column(plantId)} .seed-cell`;
+    const seedMeta = (id = plantId) => page.evaluate(seedMetaOf, `${column(id)} .seed-cell`);
+    const storedMeta = async (id = plantId) => {
+        const p = await stored(id);
+        return { description: 'description' in p ? p.description : null, tags: 'tags' in p ? p.tags : null };
+    };
+    const metaStored = (expected, id = plantId) => page.waitForFunction(({ id, expected }) => {
+        const p = JSON.parse(localStorage.getItem('cells.garden/v1')).projects.find((x) => x.id === id);
+        return JSON.stringify({ description: 'description' in p ? p.description : null, tags: 'tags' in p ? p.tags : null }) === JSON.stringify(expected);
+    }, { id, expected }, { timeout: 5000 });
+    // A press on the empty board beside the plants: outside every seed cell.
+    const pressOutside = async () => {
+        const board = await page.$eval('.kanban-scroll-container', (el) => el.getBoundingClientRect().toJSON());
+        await page.mouse.click(board.right - 30, board.top + 20);
+        await page.waitForTimeout(100);
+    };
     const allShown = await plantsShown();
-    await openPlantMenu();
-    await page.click(menuRow('Tags'));
-    await page.fill('.garden-menu-tag-field', '  Side   project ');
+    await pressOutside();
+    let meta = await seedMeta();
+    assert(!meta.active && !meta.meta, `a plain plant shows nothing under its name: ${JSON.stringify(meta)}`);
+    assert.equal(await page.$eval(seedCell, (el) => el.getBoundingClientRect().height), 44, 'a plain plant keeps its seed cell as it was');
+
+    await page.click(`${column(plantId)} .seed-content`);
+    meta = await seedMeta();
+    console.log('active seed cell:', meta);
+    assert(meta.active && meta.addDescription && meta.addTag && meta.description === null && meta.tags.length === 0,
+        `selecting the name should offer a description and a tag: ${JSON.stringify(meta)}`);
+    const descriptionField = `${seedCell} .seed-description-field`;
+    await page.click(`${seedCell} .seed-description-add`);
+    assert.deepEqual(await page.$eval(descriptionField, (el) => [el === document.activeElement, el.maxLength]), [true, 75], 'the description is written in place, at most 75 characters');
+    // Longer than 75 characters: what is kept is cut there.
+    const longDescription = 'Everything the garden needs before it grows on the web, written down in one line that runs on';
+    const cutDescription = longDescription.slice(0, 75).trim();
+    await page.fill(descriptionField, longDescription);
     await page.keyboard.press('Enter');
-    await page.waitForFunction((id) => JSON.stringify(JSON.parse(localStorage.getItem('cells.garden/v1')).projects.find((p) => p.id === id).tags) === '["Side project"]', plantId);
-    const tagRows = await page.$$eval('.garden-menu-panel.is-open [data-tag]', (els) => els.map((e) => [e.dataset.tag, e.classList.contains('is-active')]));
-    assert.deepEqual(tagRows, [['Side project', true]], 'a new tag should be on the plant, ticked in its panel');
-    assert.equal(await page.$eval(`${menuRow('Tags')} .garden-menu-sub`, (el) => el.textContent), 'Side project', 'the Tags row names the plant\'s tags');
-    await page.click('.garden-menu-panel.is-open [data-hide-tag="Side project"]');
-    const hiddenPlant = (hidden) => page.waitForFunction(({ id, hidden }) => {
+    await metaStored({ description: cutDescription, tags: null });
+    meta = await seedMeta();
+    assert(meta.description === cutDescription && !meta.addDescription && meta.field === null && meta.focused === 'seed-description',
+        `Enter keeps the description, cut to 75, and the keyboard stays on it: ${JSON.stringify(meta)}`);
+    // Escape leaves it as it was; an emptied one is taken away; spaces are tidied.
+    await page.click(`${seedCell} .seed-description`);
+    await page.fill(descriptionField, 'Not this');
+    await page.keyboard.press('Escape');
+    assert.equal((await seedMeta()).description, cutDescription, 'Escape keeps the description as it was');
+    assert.equal((await storedMeta()).description, cutDescription);
+    await page.keyboard.press('Enter');
+    await page.fill(descriptionField, '   ');
+    await page.keyboard.press('Enter');
+    await metaStored({ description: null, tags: null });
+    meta = await seedMeta();
+    assert(meta.description === null && meta.addDescription, `an emptied description is removed: ${JSON.stringify(meta)}`);
+    await page.click(`${seedCell} .seed-description-add`);
+    await page.fill(descriptionField, '  Port   the garden, step by step ');
+    // Leaving the field keeps it: a click on "+ tag" both keeps it and opens the tag field.
+    await page.click(`${seedCell} .seed-tag-add`);
+    await metaStored({ description: 'Port the garden, step by step', tags: null });
+
+    // Tags: Enter and a comma each put one on, and the field stays open for the next.
+    const tagField = `${seedCell} .seed-tag-field`;
+    await page.waitForSelector(tagField);
+    const tagFieldState = () => page.$eval(tagField, (el) => ({
+        focused: el === document.activeElement,
+        value: el.value,
+        maxLength: el.maxLength,
+        options: [...(el.list?.options ?? [])].map((o) => o.value),
+    }));
+    assert.deepEqual(await tagFieldState(), { focused: true, value: '', maxLength: 32, options: [] }, 'the tag field opens, ready, at most 32 characters');
+    await page.fill(tagField, '  Side   project ');
+    await page.keyboard.press('Enter');
+    await metaStored({ description: 'Port the garden, step by step', tags: ['Side project'] });
+    assert.deepEqual(await tagFieldState(), { focused: true, value: '', maxLength: 32, options: [] }, 'Enter keeps the tag field open for another');
+    await page.keyboard.type('Errands,');
+    await metaStored({ description: 'Port the garden, step by step', tags: ['Side project', 'Errands'] });
+    assert.equal((await tagFieldState()).value, '', 'a comma ends a tag');
+    meta = await seedMeta();
+    console.log('tagged seed cell:', meta);
+    assert(meta.description === 'Port the garden, step by step' && meta.tags.join() === 'Side project,Errands'
+        && meta.removable.join() === 'Remove tag Side project,Remove tag Errands', `the tags show under the name, each with its ×: ${JSON.stringify(meta)}`);
+    await shot(page, '02d-seed-description-and-tags.png');
+    // A × takes its tag off, the field still open or not.
+    await page.click(`${seedCell} .seed-tag[data-tag="Errands"] .seed-tag-remove`);
+    await metaStored({ description: 'Port the garden, step by step', tags: ['Side project'] });
+    assert.deepEqual((await seedMeta()).tags, ['Side project']);
+    // A press outside ends the cell: what was written stays, the ways to change it go.
+    await pressOutside();
+    meta = await seedMeta();
+    assert(!meta.active && meta.meta && meta.description === 'Port the garden, step by step' && meta.tags.join() === 'Side project'
+        && meta.removable.length === 0 && !meta.addTag && !meta.addDescription && meta.field === null,
+        `a press outside should end the seed cell and leave its description and tags: ${JSON.stringify(meta)}`);
+
+    // From the keyboard: focus on the name makes the cell active, Tab reaches
+    // "+ tag", Escape closes its field again, and Tab on out of the cell ends it.
+    await page.focus(`${column(plantId)} .seed-content`);
+    assert((await seedMeta()).active, 'focus on the name makes the seed cell active');
+    for (let i = 0; i < 8 && (await seedMeta()).focused !== 'seed-tag-add'; i++) await page.keyboard.press('Tab');
+    assert.equal((await seedMeta()).focused, 'seed-tag-add', 'Tab from the name reaches "+ tag"');
+    await page.keyboard.press('Enter');
+    assert((await tagFieldState()).focused, 'Enter on "+ tag" opens its field');
+    await page.keyboard.press('Escape');
+    meta = await seedMeta();
+    assert(meta.field === null && meta.focused === 'seed-tag-add' && meta.active, `Escape closes the tag field and goes back to "+ tag": ${JSON.stringify(meta)}`);
+    await page.keyboard.press('Tab');
+    assert(!(await seedMeta()).active, 'the focus leaving the seed cell ends it');
+    assert.deepEqual(await storedMeta(), { description: 'Port the garden, step by step', tags: ['Side project'] }, 'the keyboard round changed nothing');
+
+    // The pill menu's Tags hides the tag's plants here, and the board says so.
+    assert(await page.$('.auth-pill'), 'the pill menu is where tags are hidden');
+    const pillTags = '.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))';
+    const hiddenPlant = (hidden, id = plantId) => page.waitForFunction(({ id, hidden }) => {
         const drawn = !!document.querySelector(`.garden-plant-wrapper[data-project-id="${id}"]`);
         return drawn !== hidden && !document.querySelector('.garden-render-stage') && !!document.querySelector('.kanban-hidden-note') === hidden;
-    }, { id: plantId, hidden }, { timeout: 5000 });
+    }, { id, hidden }, { timeout: 5000 });
+    await page.click('.auth-pill');
+    await page.click(pillTags);
+    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
     await hiddenPlant(true);
+    assert.equal(await page.$eval(`${pillTags} .garden-menu-sub`, (el) => el.textContent), '1 hidden');
+    await page.keyboard.press('Escape');
     const whileHidden = await plantsShown();
     assert(!whileHidden.garden.includes(plantId) && !whileHidden.board.includes(plantId) && whileHidden.garden.length === allShown.garden.length - 1 && whileHidden.note === '1 plant hidden',
         `hiding a tag should take its plant out of the garden and off the board: ${JSON.stringify({ allShown, whileHidden })}`);
     assert.deepEqual((await stored(plantId)).tags, ['Side project'], 'hiding a tag must leave the plant as it is');
+    // The hidden tag put on another plant takes that one out of sight at once too.
+    const otherId = allShown.board.find((id) => id !== plantId);
+    await page.click(`${column(otherId)} .seed-content`);
+    await page.click(`${column(otherId)} .seed-tag-add`);
+    assert.deepEqual(await page.$eval(`${column(otherId)} .seed-tag-field`, (el) => [...el.list.options].map((o) => o.value)), ['Side project'],
+        'the tag field suggests the garden\'s other tags');
+    await page.fill(`${column(otherId)} .seed-tag-field`, 'Side project');
+    await page.keyboard.press('Enter');
+    await hiddenPlant(true, otherId);
+    assert.deepEqual(await plantsShown(), { garden: [], board: [], note: '2 plants hidden' }, 'a plant given a hidden tag leaves the garden and the board');
+    assert.deepEqual((await storedMeta(otherId)).tags, ['Side project']);
     await page.click('.kanban-hidden-note');
     await page.click('.garden-context-menu .garden-menu-item:has(.garden-menu-label:text-is("Side project"))');
     await hiddenPlant(false);
-    if (await page.$('.auth-pill')) {
-        await page.click('.auth-pill');
-        await page.click('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))');
-        await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
-        await hiddenPlant(true);
-        assert.equal(await page.$eval('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags")) .garden-menu-sub', (el) => el.textContent), '1 hidden');
-        await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
-        await hiddenPlant(false);
-        await page.keyboard.press('Escape');
-    }
+    await settled();
+    assert.deepEqual(await plantsShown(), allShown, 'showing the tag again brings both plants back');
+    await page.click(`${column(otherId)} .seed-content`);
+    await page.click(`${column(otherId)} .seed-tag[data-tag="Side project"] .seed-tag-remove`);
+    await metaStored({ description: null, tags: null }, otherId);
+    await pressOutside();
+    // Hidden and shown again from the pill alone.
+    await page.click('.auth-pill');
+    await page.click(pillTags);
+    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
+    await hiddenPlant(true);
+    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
+    await hiddenPlant(false);
+    await page.keyboard.press('Escape');
     await settled();
     assert.deepEqual(await plantsShown(), allShown, 'showing the tag again should put the garden back as it was');
 
@@ -858,6 +1002,10 @@ async function scenario(browser, errors) {
     console.log('after reload columns:', columns);
     console.log('after reload items:', (await page.$$('.garden-item')).length);
     assert(columns.length === 2, `expected 2 columns after reload, got ${columns.length}`);
+    // The description and the tag came back with the plant, and the cell is not active.
+    const reloadedMeta = await seedMeta();
+    assert(reloadedMeta.description === 'Port the garden, step by step' && reloadedMeta.tags.join() === 'Side project' && !reloadedMeta.active,
+        `the description and tags should survive a reload: ${JSON.stringify(reloadedMeta)}`);
 
     // With the board shown, the part lit under the mouse is the part a click
     // there means: one drawn under another part's see-through box is found by
@@ -1441,6 +1589,67 @@ async function scenario(browser, errors) {
     await mpage.waitForFunction((path) => JSON.parse(localStorage.getItem('cells.garden/v1')).projects[0].seedImagePath === path, phoneSeed.path);
     assert(await mpage.$('.garden-context-menu') === null, 'choosing a seed by tap should close the menu');
 
+    // Under the name, by touch: a tap on the name offers "Add a description"
+    // and "+ tag", each a finger's size, with fields iOS does not zoom into.
+    const phoneMeta = () => mpage.evaluate(seedMetaOf, '.kanban-scroll-container .seed-cell');
+    const phoneStored = () => mpage.evaluate(() => {
+        const p = JSON.parse(localStorage.getItem('cells.garden/v1')).projects[0];
+        return { description: 'description' in p ? p.description : null, tags: 'tags' in p ? p.tags : null };
+    });
+    const phoneWaitStored = (expected) => mpage.waitForFunction((expected) => {
+        const p = JSON.parse(localStorage.getItem('cells.garden/v1')).projects[0];
+        return JSON.stringify({ description: 'description' in p ? p.description : null, tags: 'tags' in p ? p.tags : null }) === JSON.stringify(expected);
+    }, expected, { timeout: 5000 });
+    assert(!(await phoneMeta()).meta, 'a plain plant shows nothing under its name on a phone');
+    await tapAt('.seed-content');
+    await mpage.waitForSelector('.seed-cell.is-active');
+    const phoneAdds = await mpage.evaluate(() => ['.seed-description-add', '.seed-tag-add'].map((s) => document.querySelector(s).getBoundingClientRect().height));
+    assert(phoneAdds.every((h) => h >= 28), `"Add a description" and "+ tag" should be a finger's size: ${phoneAdds}`);
+    await tapAt('.seed-description-add');
+    await mpage.waitForSelector('.seed-description-field');
+    assert.deepEqual(await mpage.$eval('.seed-description-field', (el) => [el === document.activeElement, parseFloat(getComputedStyle(el).fontSize) >= 16]), [true, true],
+        'tapping "Add a description" opens its field, at 16px so iOS does not zoom');
+    const phoneLong = 'Grows on the windowsill by the basil and the mint, where the light comes in early';
+    const phoneCut = phoneLong.slice(0, 75).trim();
+    await mpage.keyboard.type(phoneLong);
+    await mpage.keyboard.press('Enter');
+    await phoneWaitStored({ description: phoneCut, tags: null });
+    await tapAt('.seed-tag-add');
+    await mpage.waitForSelector('.seed-tag-field');
+    assert.deepEqual(await mpage.$eval('.seed-tag-field', (el) => [el === document.activeElement, parseFloat(getComputedStyle(el).fontSize) >= 16]), [true, true],
+        'tapping "+ tag" opens its field, at 16px');
+    await mpage.keyboard.type('Indoor');
+    await mpage.keyboard.press('Enter');
+    await mpage.keyboard.type('Herbs,');
+    await phoneWaitStored({ description: phoneCut, tags: ['Indoor', 'Herbs'] });
+    let phoneCell = await phoneMeta();
+    console.log('phone seed cell:', phoneCell);
+    assert(phoneCell.active && phoneCell.description === phoneCut && phoneCell.tags.join() === 'Indoor,Herbs' && phoneCell.removable.length === 2,
+        `the description and both tags should show under the name: ${JSON.stringify(phoneCell)}`);
+    const removeSize = await mpage.$eval('.seed-tag[data-tag="Indoor"] .seed-tag-remove', (el) => el.getBoundingClientRect().toJSON());
+    assert(removeSize.width >= 28 && removeSize.height >= 28, `a tag's × should be a finger's size: ${JSON.stringify(removeSize)}`);
+    await shot(mpage, '04a-mobile-seed-tags.png');
+    await tapAt('.seed-tag[data-tag="Indoor"] .seed-tag-remove');
+    await phoneWaitStored({ description: phoneCut, tags: ['Herbs'] });
+    // A tap outside the cell (on the Roots label just below it) ends it; what was written stays.
+    await tapAt('.roots-zone .zone-label');
+    phoneCell = await phoneMeta();
+    assert(!phoneCell.active && phoneCell.description === phoneCut && phoneCell.tags.join() === 'Herbs' && phoneCell.removable.length === 0 && !phoneCell.addTag && phoneCell.field === null,
+        `a tap outside should end the seed cell: ${JSON.stringify(phoneCell)}`);
+    // The pill menu's Tags hides the plant by touch, and shows it again.
+    const phoneHidden = (hidden) => mpage.waitForFunction((hidden) => !document.querySelector('.garden-render-stage')
+        && !!document.querySelector('.kanban-scroll-container > .project-column') !== hidden
+        && !!document.querySelector('.kanban-hidden-note') === hidden, hidden, { timeout: 5000 });
+    await tapAt('.auth-pill');
+    await tapAt('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))');
+    await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+    await phoneHidden(true);
+    assert.equal(await mpage.textContent('.kanban-hidden-note'), '1 plant hidden');
+    await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+    await phoneHidden(false);
+    await mpage.keyboard.press('Escape');
+    assert.deepEqual(await phoneStored(), { description: phoneCut, tags: ['Herbs'] }, 'hiding a tag by touch leaves the plant as it is');
+
     // Drag the divider with a finger.
     const before = await mpage.$eval('.garden-canvas-area', (el) => el.getBoundingClientRect().height);
     const [rx, ry] = await center('.garden-resizer');
@@ -1692,7 +1901,14 @@ async function scenario(browser, errors) {
     const stems = phoneSaved.projects[0].stem.map((s) => s.content);
     console.log('phone stems:', stems);
     assert(stems.length === 2 && stems.some((s) => s.endsWith(' edited')), `phone edits were not saved: ${JSON.stringify(stems)}`);
+    assert.deepEqual({ description: phoneSaved.projects[0].description, tags: phoneSaved.projects[0].tags }, { description: phoneCut, tags: ['Herbs'] },
+        'the description and tags written by touch were saved');
     await shot(mpage, '04-mobile-dark.png');
+    await mpage.reload({ waitUntil: 'networkidle' });
+    await mpage.waitForSelector('.seed-content');
+    const reloadedPhoneSeed = await phoneMeta();
+    assert(reloadedPhoneSeed.description === phoneCut && reloadedPhoneSeed.tags.join() === 'Herbs' && !reloadedPhoneSeed.active,
+        `the description and tags should survive a reload on the phone: ${JSON.stringify(reloadedPhoneSeed)}`);
     await mctx.close();
 }
 

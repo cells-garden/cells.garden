@@ -86,7 +86,8 @@ export function upgradeLegacyTutorial(garden: Garden): Garden {
         if (!project || !/^proj_[a-f0-9]{32}$/.test(project.id)
             || project.name !== 'Start here' || project.seed !== 'Start here'
             || project.plantType !== 'plant_1' || project.hue !== 0 || project.standby
-            || project.seedImagePath || project.sharedPlantId || project.tags?.length) return project;
+            || project.seedImagePath || project.sharedPlantId || project.tags?.length
+            || project.description) return project;
         for (const layer of Object.keys(LEGACY_CELLS) as LayerName[]) {
             const cells = project[layer], lines = LEGACY_CELLS[layer];
             if (!Array.isArray(cells) || cells.length !== lines.length || cells.some((cell, index) =>

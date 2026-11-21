@@ -34,6 +34,12 @@ export interface ProjectData {
      * plant; which tags are hidden is each device's own choice.
      */
     tags?: string[];
+    /**
+     * A short line about the plant, shown under its name on the board
+     * (description.ts). Absent when it has none. Like its name and tags, it
+     * travels with the plant and merges with it.
+     */
+    description?: string;
     roots: LayerItem[];
     stem: LayerItem[];
     flowers: LayerItem[];

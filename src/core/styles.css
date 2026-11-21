@@ -465,11 +465,16 @@
 }
 
 /* Seed styling (Now acts as the Header) */
-/* Always also a .garden-zone, which makes it a flex row with its line below. */
+/* Always also a .garden-zone, with its line below. A grid of two rows: the
+   name's row (drag handle, name, share, menu) and, under the name, the plant's
+   description and tags (garden.ts, createSeedMeta), which reach on under the
+   buttons. A plant without them, in a cell that is not active, has the one row
+   it always had, laid out as the flex row it was. */
 .seed-cell {
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
-    gap: 6px;
+    column-gap: 0;
     padding: 6px 8px;
     font-weight: 600;
     font-size: 13px;
@@ -566,6 +571,208 @@
 .seed-context-btn:hover {
     color: var(--interactive-accent);
     background: var(--background-modifier-hover);
+}
+
+/* Each part in its place. The 6px the row once kept between its parts are
+   margins now, so a build without the share button leaves no gap behind. */
+.seed-cell > .column-drag-handle {
+    grid-area: 1 / 1;
+    margin-right: 10px;
+}
+
+.seed-cell > .seed-content {
+    grid-area: 1 / 2;
+}
+
+.seed-cell > .seed-share-btn {
+    grid-area: 1 / 3;
+    margin-left: 6px;
+}
+
+.seed-cell > .seed-context-btn:not(.seed-share-btn) {
+    grid-area: 1 / 4;
+    margin-left: 6px;
+}
+
+/* An active cell (its name selected, or the focus in it) shows its buttons as hovering does. */
+.seed-cell.is-active .seed-context-btn {
+    opacity: 1;
+}
+
+/* --- Under the name: the description and the tags ---
+   Quieter than the name: smaller, in the muted colour, and never in the
+   name's hue. Its lines start where the name's text does. */
+.seed-cell > .seed-meta {
+    grid-area: 2 / 2 / 3 / 5;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 0;
+    margin-top: -2px;
+    padding: 0 4px 2px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.35;
+    color: var(--text-muted);
+}
+
+/* Only what there is: nothing under a plain plant's name, and the ways to
+   write more only while the cell is active. */
+.seed-cell:not(.has-meta):not(.is-active) > .seed-meta,
+.seed-cell:not(.has-description) .seed-description,
+.seed-cell.has-description .seed-description-add,
+.seed-cell:not(.is-active) .seed-description-add,
+.seed-meta.is-describing > .seed-description,
+.seed-meta.is-describing > .seed-description-add,
+.seed-cell:not(.has-tags):not(.is-active) .seed-tags,
+.seed-cell:not(.is-active) .seed-tag-add,
+.seed-cell:not(.is-active) .seed-tag-remove,
+.seed-tags.is-adding > .seed-tag-add {
+    display: none;
+}
+
+/* Two lines at most; the rest of a long one is an ellipsis. Tapping it writes it again. */
+.seed-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    max-width: 100%;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    border-radius: 3px;
+    cursor: text;
+}
+
+.seed-description:focus-visible,
+.seed-meta button:focus-visible {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: 1px;
+}
+
+/* The quiet ways to add: faint words, and "+ tag" shaped like the chips it adds. */
+.seed-meta .seed-description-add,
+.seed-meta .seed-tag-add {
+    display: inline-flex;
+    align-items: center;
+    width: auto;
+    height: 18px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.seed-meta .seed-tag-add {
+    padding: 0 7px;
+    border: 1px dashed var(--background-modifier-border);
+}
+
+.seed-meta .seed-description-add:hover,
+.seed-meta .seed-tag-add:hover {
+    color: var(--text-normal);
+}
+
+.seed-tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+}
+
+.seed-tag {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    height: 18px;
+    box-sizing: border-box;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--background-modifier-hover);
+    color: var(--text-muted);
+    font-size: 10.5px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.seed-tag-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.seed-meta .seed-tag-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 14px;
+    min-width: 14px;
+    height: 14px;
+    margin: 0 -4px 0 3px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.seed-meta .seed-tag-remove:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-border);
+}
+
+/* The fields write in the text's own place and size, so nothing jumps as they open. */
+.seed-meta .seed-description-field,
+.seed-meta .seed-tag-field {
+    box-sizing: border-box;
+    height: auto;
+    margin: 0;
+    padding: 1px 4px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    background: var(--background-primary);
+    box-shadow: none;
+    color: var(--text-normal);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.seed-meta .seed-description-field {
+    width: calc(100% + 10px);
+    margin-left: -5px;
+}
+
+/* It takes the rest of the tags' line, or a line of its own when too little is left. */
+.seed-meta .seed-tag-field {
+    flex: 1 0 6em;
+    width: 6em;
+    max-width: 100%;
+}
+
+.seed-meta .seed-description-field:focus,
+.seed-meta .seed-tag-field:focus {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: -1px;
+    border-color: transparent;
+    box-shadow: none;
 }
 
 .kanban-list {
@@ -1051,6 +1258,8 @@
     /* No double-tap zoom, no text callout on a long press. */
     .garden-item,
     .seed-content,
+    .seed-description,
+    .seed-meta button,
     .zone-add-btn,
     .add-column-btn,
     .garden-resizer,
@@ -1058,6 +1267,50 @@
         touch-action: manipulation;
         -webkit-touch-callout: none;
         -webkit-user-select: none;
+    }
+
+    /* Under the name, a little larger, and every control a finger's size. */
+    .seed-cell > .seed-meta {
+        font-size: 12px;
+    }
+
+    .seed-meta .seed-description-add,
+    .seed-meta .seed-tag-add {
+        height: 28px;
+        font-size: 12px;
+    }
+
+    .seed-meta .seed-tag-add {
+        padding: 0 10px;
+    }
+
+    .seed-tag {
+        height: 24px;
+        padding: 0 9px;
+        font-size: 12px;
+    }
+
+    /* 28px to press, in a chip that stays 24px tall. */
+    .seed-meta .seed-tag-remove {
+        width: 28px;
+        min-width: 28px;
+        height: 28px;
+        margin: -2px -9px -2px 0;
+        font-size: 16px;
+    }
+
+    /* iOS zooms into any field under 16px when it gains focus. */
+    .seed-meta .seed-description-field,
+    .seed-meta .seed-tag-field {
+        padding: 3px 6px;
+        font-size: 16px;
+        -webkit-user-select: text;
+        user-select: text;
+    }
+
+    .seed-meta .seed-description-field {
+        width: calc(100% + 14px);
+        margin-left: -7px;
     }
 
     .garden-item.draggable-cell {
@@ -1929,38 +2182,9 @@
     accent-color: var(--interactive-accent);
 }
 
-/* A plant's Tags panel (garden.ts, tagsPanel): a field for a new tag above the garden's tags. */
-.garden-menu-tag-add {
-    padding: 8px 16px;
-}
-
-.garden-menu-tags .garden-menu-tag-field {
-    display: block;
-    width: 100%;
-    height: auto;
-    box-sizing: border-box;
-    margin: 0;
-    padding: 4px 6px;
-    font: inherit;
-    font-size: 14px;
-    color: var(--text-normal);
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 4px;
-    box-shadow: none;
-}
-
-.garden-menu-tags .garden-menu-tag-field:focus {
-    outline: 2px solid var(--interactive-accent);
-    outline-offset: -1px;
-    border-color: transparent;
-    box-shadow: none;
-}
-
 /* iOS zooms into any field under 16px when it gains focus. */
 @media (pointer: coarse) {
-    .garden-menu-hue .garden-menu-hue-field,
-    .garden-menu-tags .garden-menu-tag-field {
+    .garden-menu-hue .garden-menu-hue-field {
         font-size: 16px;
     }
 }

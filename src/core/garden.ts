@@ -7,7 +7,8 @@ import { PLANT_TYPES, plantTypeName } from './assets';
 import { avatarEl } from './avatar';
 import { ICONS, setIcon } from './icons';
 import { zoneIcon } from './zone-icons';
-import { cleanTag, gardenTags, hasTag, isHidden, setTag, tagKey, tagsOf } from './tags';
+import { cleanTag, gardenTags, hasTag, isHidden, MAX_TAG_LENGTH, setTag, tagKey, tagsOf } from './tags';
+import { descriptionOf, MAX_DESCRIPTION_LENGTH, setDescription } from './description';
 import { local } from './local';
 import { menuRow, openMenu, type MenuControls, type MenuItem } from './menu';
 import type { CellTarget } from './notify-core';
@@ -87,6 +88,8 @@ const OPEN_GROUND_RATIO_MAX = 0.82;
 const WORM_LENGTH = 7;
 // The most fireflies a garden setting can ask for.
 const MAX_FIREFLIES = 64;
+// Numbers the tag fields' suggestion lists, so no two on a page share an id.
+let seedFieldCount = 0;
 
 /** Cancel a timer or interval and hand back null, so `x = stop(x)` clears it. */
 function stop(handle: number | null): null {
@@ -1350,7 +1353,8 @@ export class GardenView extends View {
 
     private isTyping(): boolean {
         const active = this.containerEl.ownerDocument.activeElement as HTMLElement | null;
-        return !!active && this.contentEl.contains(active) && active.isContentEditable;
+        // A description or a tag being written under a plant's name counts too.
+        return !!active && this.contentEl.contains(active) && (active.isContentEditable || active.matches('.seed-meta input'));
     }
 
     async onOpen() {
@@ -1824,6 +1828,8 @@ export class GardenView extends View {
         // A chip being written in keeps what was written; its timers stop with the view.
         this.hidePeek();
         this.hoverPart(null);
+        this._activeSeedId = null;
+        this.unwatchSeedPointer();
         this.saveViewStateNow();
 
         this.stopFireflies();
@@ -1868,7 +1874,7 @@ export class GardenView extends View {
         
         // Check if we clicked on an actual interactive element
         const interactable = (e.target as HTMLElement).closest(
-            '.garden-item, .seed-content, .zone-add-btn, .add-column-btn, .column-drag-handle'
+            '.garden-item, .seed-content, .seed-meta, .zone-add-btn, .add-column-btn, .column-drag-handle'
         );
         
         // Left mouse (button 0) pans only if NOT interactable
@@ -4104,8 +4110,6 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             });
         }
 
-        items.push(this.tagsPanel(project));
-
         items.push(
             {
                 label: 'Plant hue',
@@ -4338,70 +4342,361 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
         };
     }
 
-    /**
-     * A plant's Tags panel: every tag in the garden, ticked where this plant
-     * has it, a field for a new one, and a way to hide the plant's groups.
-     * Changes are saved as they are made; the panel stays open for more.
-     */
-    private tagsPanel(project: ProjectData): MenuItem {
-        const summary = () => tagsOf(this.live(project)).join(', ') || undefined;
-        return {
-            label: 'Tags',
-            sub: summary(),
-            panel: (panel, menu) => {
-                panel.addClass('garden-menu-tags');
-                const list = panel.createDiv();
-                const hideList = panel.createDiv();
-                const draw = () => {
-                    const live = this.live(project);
-                    list.empty();
-                    for (const tag of gardenTags(this.app.gardenData)) {
-                        const row = menuRow(list, { label: tag, active: hasTag(live, tag) });
-                        row.dataset.tag = tag;
-                        row.onclick = (event) => {
-                            event.stopPropagation();
-                            toggle(tag, !hasTag(this.live(project), tag));
-                        };
-                    }
-                    hideList.empty();
-                    const own = tagsOf(live);
-                    if (own.length === 0) return;
-                    hideList.createDiv({ cls: 'garden-menu-heading', text: 'Hide in the garden' });
-                    for (const tag of own) {
-                        const row = menuRow(hideList, { label: tag });
-                        row.dataset.hideTag = tag;
-                        row.onclick = (event) => {
-                            event.stopPropagation();
-                            menu.close();
-                            this.app.setTagHidden(tag, true);
-                        };
-                    }
-                };
-                const toggle = (tag: string, on: boolean) => {
-                    setTag(this.live(project), tag, on);
-                    menu.setSub(summary() ?? '');
-                    draw();
-                    menu.refit();
-                    void this.save();
-                };
+    // --- Under a plant's name: its description and its tags ---
+    // The seed cell shows them only when the plant has them, so a plain plant
+    // looks as it always has. Selecting the name, or moving the focus into the
+    // cell, makes the cell active (is-active): it then also offers "Add a
+    // description" and "+ tag", and a × on each tag. A press anywhere outside
+    // the cell, or the focus landing somewhere outside it, ends that again.
+    //
+    // It is a press, not the focus, that ends it on a touch screen. iOS gives a
+    // tapped button no focus, so tapping "+ tag" takes the focus off the name
+    // without putting it anywhere; were that the end of the cell, "+ tag" would
+    // be gone before the tap reached it. So focus that goes nowhere leaves the
+    // cell as it is.
+    //
+    // Every change is saved at once, the way a new name is (renameSeed), and
+    // drawn into this cell alone. Only a tag hidden on this device draws the
+    // garden again, so the plant goes out of sight as hiding the tag takes it,
+    // and the board's hidden-plants note counts it.
 
-                const add = panel.createDiv('garden-menu-tag-add');
-                const field = add.createEl('input', {
-                    cls: 'garden-menu-tag-field',
-                    type: 'text',
-                    attr: { placeholder: 'New tag', maxlength: '32', 'aria-label': 'New tag', enterkeyhint: 'done' },
-                });
-                field.addEventListener('keydown', (event) => {
-                    if (event.key !== 'Enter') return;
-                    event.preventDefault();
-                    const tag = cleanTag(field.value);
-                    field.value = '';
-                    if (tag) toggle(tag, true);
-                });
-                panel.prepend(add);
-                draw();
-            },
+    /** The plant whose seed cell is active, so a redraw of the board draws it active again. */
+    private _activeSeedId: string | null = null;
+    /** The document watched for presses outside the active seed cell, once one has been active. */
+    private _seedWatchDoc: Document | null = null;
+
+    private activateSeed(cell: HTMLElement, projectId: string) {
+        if (this._activeSeedId === projectId && cell.hasClass('is-active')) return;
+        this.deactivateSeed();
+        cell.addClass('is-active');
+        this._activeSeedId = projectId;
+        this.watchSeedPointer(cell.ownerDocument);
+    }
+
+    /** End the active seed cell. A field still open in it closes, and keeps what was written in it. */
+    private deactivateSeed() {
+        this._activeSeedId = null;
+        const doc = this._seedWatchDoc ?? this.containerEl.ownerDocument;
+        for (const cell of Array.from(doc.querySelectorAll<HTMLElement>('.seed-cell.is-active'))) {
+            cell.removeClass('is-active');
+            const focused = doc.activeElement as HTMLElement | null;
+            if (focused && focused.tagName === 'INPUT' && cell.contains(focused)) focused.blur();
+        }
+    }
+
+    private onSeedPointerDown = (e: PointerEvent) => {
+        if (this._activeSeedId === null) return;
+        const target = e.target as Element | null;
+        if (target?.closest?.('.seed-cell.is-active')) return;
+        this.deactivateSeed();
+    };
+
+    /** One listener on the document, put there when a seed cell is first active and taken off with the view. */
+    private watchSeedPointer(doc: Document) {
+        if (this._seedWatchDoc === doc) return;
+        this.unwatchSeedPointer();
+        // Capturing, so a control that keeps its press to itself still ends the cell.
+        doc.addEventListener('pointerdown', this.onSeedPointerDown, true);
+        this._seedWatchDoc = doc;
+    }
+
+    private unwatchSeedPointer() {
+        this._seedWatchDoc?.removeEventListener('pointerdown', this.onSeedPointerDown, true);
+        this._seedWatchDoc = null;
+    }
+
+    /** Give a plant a new description, or none, saved at once like a new name (renameSeed). */
+    private keepDescription(project: ProjectData, text: string) {
+        const live = this.live(project);
+        if (!setDescription(live, text)) return;
+        if (live !== project) setDescription(project, text);
+        void this.app.saveGardenData();
+    }
+
+    /**
+     * Put a tag on a plant or take it off, saved at once. False when the tag
+     * is one hidden on this device: the plant goes out of sight, and the
+     * garden is drawn again without it, as hiding the tag does.
+     */
+    private keepTag(project: ProjectData, tag: string, on: boolean): boolean {
+        const live = this.live(project);
+        if (hasTag(live, tag) === on) return true;
+        setTag(live, tag, on);
+        if (live !== project) setTag(project, tag, on);
+        if (on && isHidden(live, this.app.hiddenTags)) {
+            this._activeSeedId = null;
+            void this.save();
+            return false;
+        }
+        void this.app.saveGardenData();
+        return true;
+    }
+
+    /**
+     * The description and tags under a plant's name, and while the cell is
+     * active the ways to write them. Built with the column; each change
+     * redraws this part of the cell alone, never the board.
+     */
+    private createSeedMeta(seedCell: HTMLElement, project: ProjectData) {
+        const doc = seedCell.ownerDocument;
+        const meta = seedCell.createDiv('seed-meta');
+        // The text itself is what to tap to write it again; a keyboard reaches it with Tab.
+        const description = meta.createDiv({
+            cls: 'seed-description',
+            attr: { role: 'button', tabindex: '0', title: 'Edit the description' },
+        });
+        const addDescription = meta.createEl('button', {
+            cls: 'seed-description-add',
+            text: 'Add a description',
+            attr: { type: 'button' },
+        });
+        const tags = meta.createDiv('seed-tags');
+        const addTag = tags.createEl('button', {
+            cls: 'seed-tag-add',
+            text: '+ tag',
+            attr: { type: 'button', 'aria-label': 'Add a tag' },
+        });
+
+        /** What the plant holds now, as the classes its cell is shown by. */
+        const mark = () => {
+            const live = this.live(project);
+            const described = descriptionOf(live) !== '';
+            const tagged = tagsOf(live).length > 0;
+            seedCell.toggleClass('has-description', described);
+            seedCell.toggleClass('has-tags', tagged);
+            seedCell.toggleClass('has-meta', described || tagged);
         };
+
+        const drawDescription = () => {
+            description.setText(descriptionOf(this.live(project)));
+            mark();
+        };
+
+        // Made in the cell's own document (a popped-out window has its own); drawTags puts it in place.
+        const chipFor = (tag: string) => {
+            const chip = tags.createSpan({ cls: 'seed-tag' });
+            chip.dataset.tag = tag;
+            chip.createSpan({ cls: 'seed-tag-label', text: tag });
+            const remove = chip.createEl('button', {
+                cls: 'seed-tag-remove',
+                text: '×',
+                attr: { type: 'button', 'aria-label': `Remove tag ${tag}`, title: 'Remove this tag' },
+            });
+            remove.onclick = (e) => {
+                e.stopPropagation();
+                takeOff(tag, chip);
+            };
+            return chip;
+        };
+        // The chips stand before "+ tag" and the field for a new one after it,
+        // so drawing them never touches the field being typed in. A chip that
+        // stays is the same element, left where it is: a press on its × that is
+        // still on its way to a click is never pulled out from under it.
+        const drawTags = () => {
+            const wanted = tagsOf(this.live(project));
+            const chips = new Map<string, HTMLElement>();
+            for (const chip of Array.from(tags.querySelectorAll<HTMLElement>(':scope > .seed-tag'))) {
+                if (wanted.includes(chip.dataset.tag ?? '')) chips.set(chip.dataset.tag ?? '', chip);
+                else chip.remove();
+            }
+            let next: Element = addTag;
+            for (const tag of [...wanted].reverse()) {
+                const chip = chips.get(tag) ?? chipFor(tag);
+                if (chip.nextElementSibling !== next || chip.parentElement !== tags) tags.insertBefore(chip, next);
+                next = chip;
+            }
+            mark();
+        };
+
+        /** Take a tag off. A keyboard that was on its × goes on to the next ×, or to "+ tag". */
+        const takeOff = (tag: string, chip: HTMLElement) => {
+            const held = chip.contains(doc.activeElement);
+            const at = Array.from(tags.querySelectorAll(':scope > .seed-tag')).indexOf(chip);
+            this.keepTag(project, tag, false);
+            drawTags();
+            if (!held) return;
+            const next = tags.querySelectorAll<HTMLElement>(':scope > .seed-tag .seed-tag-remove')[at];
+            (next ?? addTag).focus();
+        };
+
+        // Whether a press began in this part of the cell and is not over yet, and a way to wait for its end.
+        let pressing = false;
+        const release = () => { pressing = false; };
+        meta.addEventListener('pointerdown', () => {
+            pressing = true;
+            doc.addEventListener('pointerup', release, { once: true });
+            doc.addEventListener('pointercancel', release, { once: true });
+        });
+        // A click follows the release in the same task, so a timeout runs after it.
+        const afterPress = (then: () => void) => doc.addEventListener('pointerup', () => {
+            (doc.defaultView ?? window).setTimeout(then, 0);
+        }, { once: true });
+
+        // --- Writing the description, in place of the text ---
+        const editDescription = () => {
+            if (meta.hasClass('is-describing')) return;
+            meta.addClass('is-describing');
+            const field = meta.createEl('input', {
+                cls: 'seed-description-field',
+                type: 'text',
+                attr: {
+                    maxlength: String(MAX_DESCRIPTION_LENGTH),
+                    placeholder: 'Add a description',
+                    'aria-label': 'Description',
+                    enterkeyhint: 'done',
+                    autocomplete: 'off',
+                },
+            });
+            field.value = descriptionOf(this.live(project));
+            meta.insertBefore(field, tags);
+            let open = true;
+            /** Close the field, keeping what was written or not. From a key, the focus goes back to the text or its button. */
+            const close = (keep: boolean, refocus: boolean) => {
+                if (!open) return;
+                open = false;
+                if (keep) this.keepDescription(project, field.value);
+                const swap = () => {
+                    field.remove();
+                    meta.removeClass('is-describing');
+                    drawDescription();
+                    if (refocus) (descriptionOf(this.live(project)) ? description : addDescription).focus();
+                };
+                // A mouse press on the tags below took the focus: the text, a line taller or
+                // shorter than the field, would move them before the press became a click.
+                // The field goes once the press is over.
+                if (pressing) afterPress(swap);
+                else swap();
+            };
+            field.addEventListener('keydown', (e) => {
+                if (e.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                close(e.key === 'Enter', true);
+            });
+            // Leaving keeps what was written: a tap elsewhere, Tab, or the cell ending.
+            // focusout rather than blur, so the cell still hears where the focus went.
+            field.addEventListener('focusout', () => close(true, false));
+            // As the name is when it is written in: the whole text, ready to be replaced or changed.
+            field.focus();
+            field.select();
+        };
+        description.addEventListener('click', (e) => {
+            e.stopPropagation();
+            editDescription();
+        });
+        description.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            editDescription();
+        });
+        addDescription.onclick = (e) => {
+            e.stopPropagation();
+            editDescription();
+        };
+
+        // --- Putting tags on, one after another ---
+        const openTagField = () => {
+            const already = tags.querySelector<HTMLInputElement>('.seed-tag-field');
+            if (already) return already.focus();
+            tags.addClass('is-adding');
+            // The garden's other tags, offered as the field is typed in.
+            const suggestions = tags.createEl('datalist');
+            suggestions.id = `seed-tag-options-${++seedFieldCount}`;
+            const field = tags.createEl('input', {
+                cls: 'seed-tag-field',
+                type: 'text',
+                attr: {
+                    maxlength: String(MAX_TAG_LENGTH),
+                    list: suggestions.id,
+                    placeholder: 'Tag',
+                    'aria-label': 'New tag',
+                    enterkeyhint: 'enter',
+                    autocomplete: 'off',
+                },
+            });
+            const suggest = () => {
+                suggestions.empty();
+                const live = this.live(project);
+                for (const tag of gardenTags(this.app.gardenData)) {
+                    if (!hasTag(live, tag)) suggestions.createEl('option', { value: tag });
+                }
+            };
+            let open = true;
+            /** Close the field. Kept, what is still in it goes on as a tag too; from a key, the focus goes back to "+ tag". */
+            const close = (keep: boolean, refocus: boolean) => {
+                if (!open) return;
+                open = false;
+                const rest = field.value;
+                field.remove();
+                suggestions.remove();
+                tags.removeClass('is-adding');
+                if (keep && rest.trim()) {
+                    if (!put([rest])) return;
+                    drawTags();
+                }
+                if (refocus) addTag.focus();
+            };
+            /** Put tags on the plant. False when one of them hid it here: the garden is being drawn without it. */
+            const put = (texts: string[]): boolean => {
+                for (const text of texts) {
+                    const tag = cleanTag(text);
+                    if (tag && !this.keepTag(project, tag, true)) return false;
+                }
+                return true;
+            };
+            /** Put tags on and keep the field open for the next one, unless the plant just went out of sight. */
+            const putAndGoOn = (texts: string[]) => {
+                if (!put(texts)) return close(false, false);
+                drawTags();
+                suggest();
+            };
+            field.addEventListener('keydown', (e) => {
+                if (e.isComposing) return;
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const text = field.value;
+                    field.value = '';
+                    putAndGoOn([text]);
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    close(false, true);
+                }
+            });
+            field.addEventListener('input', (e) => {
+                const input = e as InputEvent;
+                if (input.isComposing) return;
+                // A comma ends a tag, typed or pasted. The field is read rather than the key,
+                // since a phone's keyboard does not always say which key it was.
+                if (field.value.includes(',')) {
+                    const parts = field.value.split(',');
+                    field.value = parts.pop() ?? '';
+                    putAndGoOn(parts);
+                    return;
+                }
+                // One of the garden's tags picked from the suggestions goes on at once.
+                const picked = input.inputType === 'insertReplacementText'
+                    && Array.from(suggestions.options).some(option => tagKey(option.value) === tagKey(field.value));
+                if (!picked) return;
+                const text = field.value;
+                field.value = '';
+                putAndGoOn([text]);
+            });
+            // Leaving closes the field. A tag typed but not yet ended with Enter still goes
+            // on, so a phone keyboard's Done, which only leaves the field, never loses it.
+            field.addEventListener('focusout', () => close(true, false));
+            suggest();
+            field.focus();
+        };
+        addTag.onclick = (e) => {
+            e.stopPropagation();
+            openTagField();
+        };
+
+        drawDescription();
+        drawTags();
     }
 
     createProjectColumn(parent: HTMLElement, project: ProjectData) {
@@ -4439,6 +4734,7 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             if (seedContent.hasClass("is-editing")) return;
             e.stopPropagation();
             this.selectCell(seedContent);
+            this.activateSeed(seedCell, project.id);
         });
 
         seedContent.addEventListener("dblclick", () => this.startEditing(seedContent));
@@ -4522,6 +4818,21 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
         });
 
         updateMenuBtn(); // Set initial state
+
+        // --- The description and tags under the name, and when the cell is active ---
+        this.createSeedMeta(seedCell, project);
+        if (this._activeSeedId === project.id) seedCell.addClass('is-active');
+        seedCell.addEventListener('focusin', () => this.activateSeed(seedCell, project.id));
+        seedCell.addEventListener('focusout', (e) => {
+            const next = e.relatedTarget as Node | null;
+            // Focus that goes nowhere is left to the press that took it (see the note above activateSeed).
+            if (!next || seedCell.contains(next)) return;
+            if (seedCell.hasClass('is-active')) this.deactivateSeed();
+        });
+        // Escape on the name puts the cell back as it was; the shortcut lets go of the focus.
+        seedCell.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && e.target === seedContent && !seedContent.hasClass('is-editing')) this.deactivateSeed();
+        });
 
         // --- BOTTOM HALF (Roots, Minerals) ---
         const bottomHalf = columnBody.createDiv("column-bottom-half");

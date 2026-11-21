@@ -80,7 +80,7 @@ Invitation tokens are removed from the address and kept for up to 24 hours while
 
 `src/core/tutorial.ts` contains a snapshot of the original Tutorial garden's plant: its 39 cells, sprite choices, and hue. Every copy receives fresh IDs with no assignments or shared-plant reference. It is saved only when the anonymous store has never existed, or offered to a new account with no remote garden or cached copy. Existing empty gardens stay empty. The account menu can add another copy explicitly. `/tutorial` uses its own local store at `cells.garden/v1/tutorial` and keeps practice edits across visits.
 
-An untouched seven-cell `Start here` starter from the earlier beta is upgraded in place when a local or signed-in garden opens. Matching is conservative: changed text, layers, completion, artwork, tags, assignments, highlighting, or shared plants are left alone. The plant ID and position are preserved; replacement cells use deterministic IDs so concurrent device upgrades do not create duplicates. This never adds a tutorial to an empty garden.
+An untouched seven-cell `Start here` starter from the earlier beta is upgraded in place when a local or signed-in garden opens. Matching is conservative: changed text, layers, completion, artwork, tags, a description, assignments, highlighting, or shared plants are left alone. The plant ID and position are preserved; replacement cells use deterministic IDs so concurrent device upgrades do not create duplicates. This never adds a tutorial to an empty garden.
 
 ## Assets
 

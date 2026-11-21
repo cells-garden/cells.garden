@@ -109,6 +109,7 @@ test('edited, customized, shared and deleted starters are never replaced', () =>
         p => { p.name = 'My project'; }, p => { p.seed = 'My project'; },
         p => { p.hue = 20; }, p => { p.standby = true; }, p => { p.plantType = 'plant_2'; },
         p => { p.seedImagePath = 'seeds/seed2.png'; }, p => { p.tags = ['personal']; },
+        p => { p.description = 'My own words'; },
         p => { p.sharedPlantId = 'shared'; }, p => { p.minerals[0].content = 'My own idea'; },
         p => { p.minerals[0].isComplete = true; }, p => { p.minerals[0].highlighted = true; },
         p => { p.minerals[0].assignees = ['someone']; }, p => { p.minerals[0].imagePath = 'minerals/mineral1.png'; },

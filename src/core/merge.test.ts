@@ -179,3 +179,38 @@ test('tags taken off on one side stay off', () => {
     const merged = mergeGardens(base, local, copy(base), now);
     assert.equal('tags' in merged.projects[0], false);
 });
+
+test('a description written on one side is kept when the other side renamed the plant', () => {
+    const base = garden([plant('a', 0, { tags: ['work'] })]);
+    const local = copy(base);
+    local.projects[0].description = 'Taxes before May';
+    const remote = copy(base);
+    remote.projects[0].seed = remote.projects[0].name = 'Taxes';
+    const merged = mergeGardens(base, local, remote, now);
+    assert.equal(merged.projects[0].description, 'Taxes before May');
+    assert.equal(merged.projects[0].seed, 'Taxes');
+    assert.deepEqual(merged.projects[0].tags, ['work']);
+});
+
+test('a description removed on one side stays removed, and both changing it keeps the server\'s', () => {
+    const base = garden([plant('a', 0, { description: 'Old words' })]);
+    const local = copy(base);
+    delete local.projects[0].description;
+    const cleared = mergeGardens(base, local, copy(base), now);
+    assert.equal('description' in cleared.projects[0], false);
+
+    const mine = copy(base);
+    mine.projects[0].description = 'Mine';
+    const theirs = copy(base);
+    theirs.projects[0].description = 'Theirs';
+    assert.equal(mergeGardens(base, mine, theirs, now).projects[0].description, 'Theirs');
+});
+
+test('a shared plant carries its description to everyone who has it', () => {
+    const base = plantData(plant('a', 0, { sharedPlantId: 'p1' }));
+    const local = { ...copy(base), description: 'For the allotment' };
+    const remote = { ...copy(base), stem: [item('theirs')] };
+    const merged = mergePlant(base, local, remote);
+    assert.equal(merged.description, 'For the allotment');
+    assert.deepEqual(merged.stem.map(s => s.content), ['theirs']);
+});

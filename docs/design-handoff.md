@@ -88,7 +88,9 @@ For a single PNG or another export location, use
 native dimensions are preserved. Invalid exports and artwork edited directly
 outside the mapped index are rejected. Without the live plugin, save the native
 export as `Downloads/cells.garden.zip`, replacing the previous file, and the
-same server imports it. Ready for dev alone does not transfer files or push Git.
+same server imports it. For plants, Ready for dev is enough on its own: see
+[Plants from Figma](#plants-from-figma). For other artwork it does not transfer
+files or push Git.
 
 The live connection covers mapped PNG artwork. The original animated GIF,
 unmatched legacy logos, generated application icons, inline crow graphics,
@@ -208,7 +210,37 @@ preserved; canvas-only background fills were removed.
 Functional Assembly Slot components remain because their nested Sprite instances
 and padding are used by the existing assemblies. Export and preview instances
 remain linked to canonical sources. Historical UI, unreleased work and sketches
-are references. Ready for dev does not transfer edits or enable application features.
+are references. Outside the Plants section, Ready for dev does not transfer edits
+or enable application features.
+
+## Plants from Figma
+
+Every plant family lives in the **Plants** section of the ASSETS page, in the
+order the Plant type menu shows them, next to a short note on how to add one.
+A family is a component set named `Source/Plants/<Name>`, whose variants have
+two properties, Part (Stem or Flowers) and Variant (stem1, flower1 …), in
+either order, at least one stem and one flower, drawn in whole pixels.
+
+The GitHub Action **Import Figma plants** (`.github/workflows/import-figma-plants.yml`,
+`scripts/import-figma-plants.mjs`) reads the file, takes every family marked
+Ready for dev, and commits to `dev`:
+
+- a family the garden does not have becomes the next plant type: "New plant: X";
+- a family it has, found by a sprite already taken from it or by its name, brings
+  its new variants ("More of X"), its variants drawn again as new components or
+  changed in place ("New drawing for X", replacing the files where they are, so
+  plants already in gardens show it) and its new name ("X is now Y").
+
+Pixels are compared as they look, so Figma's rounding in nearly transparent
+pixels is not a new drawing. Removing a variant in Figma removes nothing, and
+two families with one name stop the import. The commit is checked (typecheck,
+lint, design tests, build) before it is pushed, and Vercel deploys `dev` to
+dev.cells.garden.
+
+It runs on a schedule (GitHub runs it every few hours) and from **Run workflow**
+on the `dev` branch, which also takes plant names to import without the Ready
+for dev mark and a dry run that only reports what would change. The plugin API
+cannot set Ready for dev; mark a family by hand in Figma.
 
 ## Routine workflow
 

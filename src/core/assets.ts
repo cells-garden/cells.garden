@@ -58,6 +58,7 @@ export const PLANT_TYPE_NAMES: Readonly<Record<string, string>> = {
     plant_8: 'Cluster',
     plant_9: 'Plume',
     plant_10: 'Leafy',
+    plant_11: 'Parasol',
 };
 
 /** A plant type's name. A folder new to the pack goes by its own, "plant_10" as "Plant 10". */

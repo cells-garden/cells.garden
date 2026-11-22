@@ -50,6 +50,21 @@ function plantParts(family) {
     return parts;
 }
 
+/**
+ * A node's size in Figma's pixels. Figma's file API gives it as the node's
+ * absoluteBoundingBox (or its size, with geometry asked for); the plugin API,
+ * and this script's tests, as width and height. A float a hair off a whole
+ * pixel (37.00000762939453) is that pixel.
+ */
+export function nativeSize(node) {
+    const pick = (...values) => values.find(value => typeof value === 'number' && Number.isFinite(value));
+    const whole = (value) => (value !== undefined && Math.abs(value - Math.round(value)) < 0.01 ? Math.round(value) : value);
+    return {
+        width: whole(pick(node?.width, node?.size?.x, node?.absoluteBoundingBox?.width)),
+        height: whole(pick(node?.height, node?.size?.y, node?.absoluteBoundingBox?.height)),
+    };
+}
+
 /** A plant's name as names are compared: one space between words, any case. */
 const plantKey = (name) => String(name).replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -90,13 +105,17 @@ export function discoverReadyPlants(file, index, existingFolders = [], wanted = 
         const parts = sources.map(({ source, category, variant }) => {
             const path = `src/assets/pack/plant_${nextNumber + offset}/${category}/${variant}.png`;
             const exported = exports.get(path);
-            if (exported) need(exported.type === 'INSTANCE' && exported.componentId === source.id
-                && exported.width === source.width && exported.height === source.height,
-                `EXPORTS instance does not reference ${source.name} at its native size: ${path}`);
-            need(Number.isInteger(source.width) && Number.isInteger(source.height) && source.width > 0 && source.height > 0,
+            const size = nativeSize(source);
+            if (exported) {
+                const exportedSize = nativeSize(exported);
+                need(exported.type === 'INSTANCE' && exported.componentId === source.id
+                    && exportedSize.width === size.width && exportedSize.height === size.height,
+                    `EXPORTS instance does not reference ${source.name} at its native size: ${path}`);
+            }
+            need(Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0,
                 `Invalid native dimensions for ${path}`);
             return { path, category, variant, sourceNodeId: source.id, sourceName: source.name,
-                width: source.width, height: source.height, exportNodeId: exported?.id ?? source.id,
+                width: size.width, height: size.height, exportNodeId: exported?.id ?? source.id,
                 exportName: exported ? path : source.name };
         });
         need(parts.some(part => part.category === 'stem') && parts.some(part => part.category === 'flowers'),

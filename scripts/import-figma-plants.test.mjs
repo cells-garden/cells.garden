@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { discoverReadyPlants, wantedPlants } from './import-figma-plants.mjs';
+import { discoverReadyPlants, nativeSize, wantedPlants } from './import-figma-plants.mjs';
 
 function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plantNo = 10 } = {}) {
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 12, height: 8 };
@@ -113,6 +113,25 @@ test('an already imported family with Stem_1/flower_1 variants is recognized, no
 
 test('ignores families without Ready for dev status', () => {
     assert.deepEqual(discoverReadyPlants(fixture({ status: null }), index, ['plant_9']), []);
+});
+
+test('reads sizes the way Figma\'s file API gives them', () => {
+    assert.deepEqual(nativeSize({ absoluteBoundingBox: { x: 1, y: 2, width: 37.00000762939453, height: 14 } }), { width: 37, height: 14 });
+    assert.deepEqual(nativeSize({ size: { x: 21, y: 11 } }), { width: 21, height: 11 });
+    assert.deepEqual(nativeSize({ width: 12, height: 8 }), { width: 12, height: 8 });
+    assert.equal(nativeSize({ absoluteBoundingBox: { width: 36.5, height: 14 } }).width, 36.5);
+    assert.deepEqual(nativeSize({}), { width: undefined, height: undefined });
+    // A family as the file API sends it: no width or height on the nodes themselves.
+    const box = (id, name, width, height) => ({ id, type: 'COMPONENT', name, absoluteBoundingBox: { x: 0, y: 0, width, height } });
+    const family = { id: '471:446', type: 'COMPONENT_SET', name: 'Source/Plants/Leafy', devStatus: null, children: [
+        box('469:441', 'Variant=stem2, Part=Stem', 37, 14), box('471:466', 'Variant=flower1, Part=Flowers', 37.000003, 14),
+    ] };
+    const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family] }] } };
+    const [found] = discoverReadyPlants(file, index, ['plant_9'], wantedPlants('Leafy'));
+    assert.deepEqual(found.parts.map(p => [p.path, p.width, p.height]), [
+        ['src/assets/pack/plant_10/stem/stem2.png', 37, 14],
+        ['src/assets/pack/plant_10/flowers/flower1.png', 37, 14],
+    ]);
 });
 
 test('a plant named by hand comes in without Ready for dev; others still need it', () => {

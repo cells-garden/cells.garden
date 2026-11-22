@@ -346,12 +346,18 @@ test('a picture is compared by its pixels, not by how it was written', () => {
     const sameRedOtherBytes = png(3, 2, picture([200, 30, 40, 255]), { filter: 1, level: 1 });
     assert.notEqual(red.toString('hex'), sameRedOtherBytes.toString('hex'));
     assert.equal(samePicture(red, sameRedOtherBytes), true);
-    assert.equal(samePicture(red, png(3, 2, picture([201, 30, 40, 255]))), false);
     assert.equal(samePicture(red, png(2, 3, picture([200, 30, 40, 255], 2, 3))), false);
     // A fully transparent pixel is transparent, whatever colour it carries.
     const clearRed = picture([200, 30, 40, 255]); clearRed[0] = [9, 9, 9, 0];
     assert.equal(samePicture(red, png(3, 2, clearRed)), true);
     assert.deepEqual(Array.from(pngPixels(red).rgba.slice(0, 8)), [0, 0, 0, 0, 200, 30, 40, 255]);
+    // Figma's rounding noise in a nearly transparent pixel (seen on Fork's stem5: alpha 9, blue 0 vs 28) is no change.
+    const faint = (blue) => { const p = picture([200, 30, 40, 255]); p[1] = [28, 28, blue, 9]; return png(3, 2, p); };
+    assert.equal(samePicture(faint(0), faint(28)), true);
+    // A faint pixel made visible, or an opaque one recoloured, is a change.
+    const visible = picture([200, 30, 40, 255]); visible[1] = [28, 28, 0, 40];
+    assert.equal(samePicture(faint(0), png(3, 2, visible)), false);
+    assert.equal(samePicture(red, png(3, 2, picture([203, 30, 40, 255]))), false);
     assert.equal(pngPixels(Buffer.from('not a png')), null);
 });
 

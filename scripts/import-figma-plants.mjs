@@ -83,12 +83,27 @@ export function pngPixels(bytes) {
     }
 }
 
-/** Whether two PNGs show the same picture (pngPixels), else whether they are the same bytes. */
+/**
+ * Whether two PNGs show the same picture (pngPixels), else whether they are
+ * the same bytes. Figma's renderer rounds the colour of a nearly transparent
+ * pixel differently from one export to the next (a pixel at alpha 9 came back
+ * 28 levels bluer), so pixels are compared as they look: alpha within one
+ * level, and each colour times its alpha within one and a half levels. Any
+ * change a person could see is still a change.
+ */
 export function samePicture(a, b) {
     const one = pngPixels(a);
     const other = pngPixels(b);
     if (!one || !other) return sha256(a) === sha256(b);
-    return one.width === other.width && one.height === other.height && Buffer.from(one.rgba).equals(Buffer.from(other.rgba));
+    if (one.width !== other.width || one.height !== other.height) return false;
+    const x = one.rgba, y = other.rgba;
+    for (let i = 0; i < x.length; i += 4) {
+        if (Math.abs(x[i + 3] - y[i + 3]) > 1) return false;
+        for (let k = 0; k < 3; k++) {
+            if (Math.abs(x[i + k] * x[i + 3] - y[i + k] * y[i + 3]) > 255 * 1.5) return false;
+        }
+    }
+    return true;
 }
 
 function walk(node, result = []) {

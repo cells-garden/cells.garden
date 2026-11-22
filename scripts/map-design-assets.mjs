@@ -64,7 +64,7 @@ export function classifyMapping(node, context, bytes, inventory) {
 
 export const isReadLimit = error => /rate limit|try again tomorrow|reauthentication|unauthorized/i.test(error.message);
 
-const PLANTS = { plant_1: 'Bell', plant_2: 'Branch', plant_3: 'Vine', plant_4: 'Spray', plant_5: 'Arch', plant_6: 'Fork', plant_7: 'Starburst', plant_8: 'Cluster', plant_9: 'Plume', plant_10: 'Plume', plant_11: 'Leafy' };
+const PLANTS = { plant_1: 'Bell', plant_2: 'Branch', plant_3: 'Vine', plant_4: 'Spray', plant_5: 'Arch', plant_6: 'Fork', plant_7: 'Starburst', plant_8: 'Cluster', plant_9: 'Plume', plant_10: 'Leafy' };
 const ENVIRONMENT = { 'bg_image.png': 'Background', 'cloud.png': 'Clouds', 'mountains.png': 'Mountains', 'ground_tile.png': 'Ground Tile', 'stars_pattern.gif': 'Stars' };
 
 function unique(nodes) { return nodes.length === 1 ? nodes[0] : undefined; }

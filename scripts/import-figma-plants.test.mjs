@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { discoverReadyPlants } from './import-figma-plants.mjs';
+import { discoverReadyPlants, wantedPlants } from './import-figma-plants.mjs';
 
 function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plantNo = 10 } = {}) {
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 12, height: 8 };
@@ -113,6 +113,18 @@ test('an already imported family with Stem_1/flower_1 variants is recognized, no
 
 test('ignores families without Ready for dev status', () => {
     assert.deepEqual(discoverReadyPlants(fixture({ status: null }), index, ['plant_9']), []);
+});
+
+test('a plant named by hand comes in without Ready for dev; others still need it', () => {
+    assert.deepEqual([...wantedPlants(' fern,  Leafy  Two ,,')], ['fern', 'leafy two']);
+    assert.deepEqual([...wantedPlants(undefined)], []);
+    const found = discoverReadyPlants(fixture({ status: null }), index, ['plant_9'], wantedPlants('FERN'));
+    assert.equal(found[0]?.displayName, 'Fern');
+    assert.equal(found[0]?.plantType, 'plant_10');
+    assert.deepEqual(discoverReadyPlants(fixture({ status: null }), index, ['plant_9'], wantedPlants('Birch')), []);
+    // Already imported, it is not imported again however it is asked for.
+    const published = { assets: [{ path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' }, { path: 'src/assets/pack/plant_10/flowers/flower1.png', sourceNodeId: '10:2' }] };
+    assert.deepEqual(discoverReadyPlants(fixture({ status: null }), published, ['plant_10'], wantedPlants('Fern')), []);
 });
 
 test('rejects incomplete plant families', () => {

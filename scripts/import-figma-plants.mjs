@@ -50,7 +50,23 @@ function plantParts(family) {
     return parts;
 }
 
-export function discoverReadyPlants(file, index, existingFolders = []) {
+/** A plant's name as names are compared: one space between words, any case. */
+const plantKey = (name) => String(name).replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The plant names asked for by hand ("Leafy, Fern"): a family named
+ * Source/Plants/<one of these> is imported whether it is marked Ready for dev
+ * in Figma or not. Case and extra spaces do not matter.
+ */
+export function wantedPlants(text = '') {
+    return new Set(String(text ?? '').split(',').map(plantKey).filter(Boolean));
+}
+
+/**
+ * The plant families to import: marked Ready for dev in Figma, or named in
+ * `wanted` (wantedPlants) by whoever ran the import by hand.
+ */
+export function discoverReadyPlants(file, index, existingFolders = [], wanted = new Set()) {
     const pages = file.document?.children || [];
     const page = pages.find(node => node.id === '27:1966' || node.name === 'ASSETS');
     need(page, 'Figma ASSETS page not found.');
@@ -60,7 +76,8 @@ export function discoverReadyPlants(file, index, existingFolders = []) {
     const nextNumber = Math.max(0, ...[...existing].map(name => Number(/^plant_(\d+)$/.exec(name)?.[1] || 0))) + 1;
     const knownSources = new Set(index.assets.map(asset => asset.sourceNodeId).filter(Boolean));
     const families = walk(page).filter(node => (node.type === 'FRAME' || node.type === 'COMPONENT_SET')
-        && /^Source\/Plants\//.test(node.name || '') && node.devStatus?.type === 'READY_FOR_DEV')
+        && /^Source\/Plants\//.test(node.name || '')
+        && (node.devStatus?.type === 'READY_FOR_DEV' || wanted.has(plantKey(node.name.slice('Source/Plants/'.length)))))
         .map(family => ({ family, sources: plantParts(family) }))
         .filter(({ family, sources }) => {
             const mappedCount = sources.filter(part => knownSources.has(part.source.id)).length;
@@ -90,7 +107,7 @@ export function discoverReadyPlants(file, index, existingFolders = []) {
     });
 }
 
-export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT, fetcher = fetch }) {
+export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT, fetcher = fetch, wanted = new Set() }) {
     need(token, 'FIGMA_TOKEN is required.');
     const headers = { 'X-Figma-Token': token };
     const response = await fetcher(`https://api.figma.com/v1/files/${fileKey}`, { headers });
@@ -101,7 +118,7 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     const index = JSON.parse(indexText);
     const folders = (await import('node:fs')).readdirSync(resolve(root, 'src/assets/pack'), { withFileTypes: true })
         .filter(entry => entry.isDirectory() && /^plant_\d+$/.test(entry.name)).map(entry => entry.name);
-    const families = discoverReadyPlants(file, index, folders);
+    const families = discoverReadyPlants(file, index, folders, wanted);
     if (!families.length) return { imported: [], unchanged: true };
     const parts = families.flatMap(family => family.parts);
     const imageResponse = await fetcher(`https://api.figma.com/v1/images/${fileKey}?ids=${parts.map(part => encodeURIComponent(part.exportNodeId)).join(',')}&format=png&scale=1`, { headers });
@@ -161,7 +178,8 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        const result = await importReadyPlants({ token: process.env.FIGMA_TOKEN });
+        // FIGMA_PLANTS: the names typed into "Run workflow", imported even when not marked Ready for dev.
+        const result = await importReadyPlants({ token: process.env.FIGMA_TOKEN, wanted: wantedPlants(process.env.FIGMA_PLANTS) });
         console.log(JSON.stringify(result));
     } catch (error) {
         console.error(error.message);

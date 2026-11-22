@@ -456,14 +456,28 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
         const uid = currentUser;
         const petCount = activePetCount(app.settings);
         const itemCount = shownItems(app.settings).length;
-        const common: MenuItem[] = [
-            ...(routes ? [
+        const about: MenuItem = { label: 'About', onClick: () => routes ? location.assign('/about/') : new AboutModal().open() };
+        // Signed out on the web, the menu is the way in: the practice garden to
+        // try things in and the page that says what this is, after Sign in
+        // (auth.ts puts it first). The rest of the menu comes with an account.
+        // Tags stay while the garden has them, so hidden plants can come back.
+        // Export or import is among the rest, so the guide and the about page
+        // say a backup on the website comes with signing in; a new account
+        // starts with this browser's garden (the seed in openGarden above).
+        if (!uid && routes) {
+            return [
                 { label: 'Tutorial garden', onClick: () => location.assign('/tutorial') },
-                ...(uid ? [{ label: 'My profile', onClick: () => location.assign(userPath(uid)) }] : []),
-            ] : []),
-            { label: 'Add tutorial plant', onClick: () => app.addProject(tutorialPlant()) },
+                about,
+                ...tagsMenu(app),
+            ];
+        }
+        const common: MenuItem[] = [
+            ...(uid && routes ? [{ label: 'My profile', onClick: () => location.assign(userPath(uid)) }] : []),
+            // The extension and Obsidian have no tutorial garden to go to, so
+            // signed out there the tutorial plant can still be added here.
+            ...(!uid ? [{ label: 'Add tutorial plant', onClick: () => app.addProject(tutorialPlant()) }] : []),
             reportIssueItem(),
-            { label: 'About', onClick: () => routes ? location.assign('/about/') : new AboutModal().open() },
+            about,
             { label: 'Export or import', onClick: () => openGardenFiles(app) },
             // Items wait for Max's approval, so only a build with the extras offers them.
             ...(EXTRAS ? [{
@@ -491,24 +505,133 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
             },
         ];
         if (!uid || !(await sharingAvailable(supabase))) return common;
-        const [gardens, spaces] = await Promise.all([listSharedGardens(supabase, uid), listOwnSpaces(supabase, uid)]);
-        const items: MenuItem[] = [];
-        if (gardens.length + spaces.length > 0) {
-            items.push({ label: 'Gardens', heading: true });
-            items.push({ label: 'My garden', active: !shared, onClick: () => { openGarden(uid, null).catch(fail); } });
-            for (const s of spaces) {
-                items.push({ label: s.name, active: shared?.id === s.id, onClick: () => { openGarden(uid, s).catch(fail); } });
+        const [gardens, spaces, own, offers] = await Promise.all([
+            listSharedGardens(supabase, uid),
+            listOwnSpaces(supabase, uid),
+            ownGardenId(supabase, uid).catch(() => null),
+            listPlantOffers(supabase).catch(() => []),
+        ]);
+        if (own && currentUser === uid) ownId = own.id;
+
+        /** A garden was renamed: when it is the one on screen, the pill (and the remembered garden) say so. */
+        const renamed = (id: string, name: string) => {
+            if (currentUser !== uid || (shared?.id ?? ownId) !== id) return;
+            if (shared) {
+                shared = { ...shared, name };
+                writeJson(activeKey(uid), shared);
             }
-            for (const g of gardens) {
-                items.push({
-                    label: g.name,
-                    sub: `by ${g.ownerName}`,
-                    active: shared?.id === g.id,
-                    onClick: () => { openGarden(uid, { id: g.id, name: g.name }).catch(fail); },
-                });
+            pill.setLabel(name);
+        };
+        // The garden on screen may have been renamed elsewhere since it opened.
+        const onScreen = shared ? [...spaces, ...gardens].find(g => g.id === shared?.id) : own;
+        if (onScreen) renamed(onScreen.id, onScreen.name);
+
+        // Each garden's own actions sit behind the ⋯ on its row and act on that
+        // garden, whichever one is on screen. Only the one on screen needs more
+        // than the call itself: the pill shows its name, and a garden that goes
+        // away is left for the user's own first.
+        const renameItem = (garden: { id: string; name: string }): MenuItem => ({
+            label: 'Rename garden',
+            onClick: () => new RenameGardenModal(garden.name, async (name) => {
+                await renameGarden(supabase, garden.id, name);
+                renamed(garden.id, name);
+            }).open(),
+        });
+        const shareOwn = async () => {
+            try {
+                let row = await ownGardenId(supabase, uid);
+                if (!row) {
+                    // A fresh account has no row until its first save; the save
+                    // writes the garden on screen, so that has to be this one.
+                    if (shared) await openGarden(uid, null);
+                    await app.saveGardenData();
+                    row = await ownGardenId(supabase, uid);
+                }
+                if (!row) {
+                    notify(host, 'Could not share yet. Try again in a moment.');
+                    return;
+                }
+                const garden = row;
+                new ShareGardenModal(supabase, garden.id, garden.name, name => renamed(garden.id, name)).open();
+            } catch (e) {
+                fail(e);
             }
+        };
+        const deleteItem = (space: { id: string; name: string }): MenuItem => ({
+            label: 'Delete garden space',
+            danger: true,
+            onClick: () => new GardenQuestionModal(
+                `Delete ${space.name}?`,
+                'Its plants go too, for everyone who shares it.',
+                'Delete',
+                async () => {
+                    try {
+                        // Leave it first, so nothing saves into a row that is going away.
+                        if (shared?.id === space.id) await openGarden(uid, null);
+                        await deleteSpace(supabase, space.id);
+                        notify(host, `Deleted ${space.name}.`);
+                    } catch (e) {
+                        fail(e);
+                    }
+                },
+            ).open(),
+        });
+        const leaveItem = (garden: { id: string; name: string }): MenuItem => ({
+            label: 'Leave garden',
+            danger: true,
+            onClick: () => new GardenQuestionModal(`Leave ${garden.name}?`, 'You can come back with a new link.', 'Leave', async () => {
+                try {
+                    await removeMember(supabase, garden.id, uid);
+                    notify(host, `Left ${garden.name}.`);
+                    if (shared?.id === garden.id) await openGarden(uid, null);
+                } catch (e) {
+                    fail(e);
+                }
+            }).open(),
+        });
+
+        const items: MenuItem[] = [{
+            label: 'Gardens',
+            heading: true,
+            button: {
+                text: '+',
+                label: 'New garden space',
+                onClick: () => new NewSpaceModal(async (name) => {
+                    try {
+                        await openGarden(uid, await createSpace(supabase, uid, name));
+                    } catch (e) {
+                        notify(host, `Could not make the space: ${(e as Error).message}`);
+                    }
+                }).open(),
+            },
+        }, {
+            label: 'My garden',
+            active: !shared,
+            onClick: () => { openGarden(uid, null).catch(fail); },
+            // Renaming needs the row a first save makes; sharing makes it itself.
+            actions: [...(own ? [renameItem(own)] : []), { label: 'Share garden', onClick: () => void shareOwn() }],
+        }];
+        for (const s of spaces) {
+            items.push({
+                label: s.name,
+                active: shared?.id === s.id,
+                onClick: () => { openGarden(uid, s).catch(fail); },
+                actions: [
+                    renameItem(s),
+                    { label: 'Share garden', onClick: () => new ShareGardenModal(supabase, s.id, s.name, name => renamed(s.id, name)).open() },
+                    deleteItem(s),
+                ],
+            });
         }
-        const offers = await listPlantOffers(supabase).catch(() => []);
+        for (const g of gardens) {
+            items.push({
+                label: g.name,
+                sub: `by ${g.ownerName}`,
+                active: shared?.id === g.id,
+                onClick: () => { openGarden(uid, { id: g.id, name: g.name }).catch(fail); },
+                actions: [leaveItem(g)],
+            });
+        }
         const inbox = center;
         if (inbox?.available) {
             items.push({
@@ -523,88 +646,6 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
             onClick: () => new FriendsModal(supabase, uid, plantOffered,
                 routes ? (id) => location.assign(userPath(id)) : undefined).open(),
         });
-        items.push({
-            label: 'New garden space',
-            onClick: () => new NewSpaceModal(async (name) => {
-                try {
-                    await openGarden(uid, await createSpace(supabase, uid, name));
-                } catch (e) {
-                    notify(host, `Could not make the space: ${(e as Error).message}`);
-                }
-            }).open(),
-        });
-        const ownSpace = shared && spaces.find(s => s.id === shared?.id);
-        const namedGarden = ownSpace ?? (!shared ? await ownGardenId(supabase, uid) : null);
-        const renamed = (id: string, name: string) => {
-            if (currentUser !== uid || (shared?.id ?? ownId) !== id) return;
-            if (shared) {
-                shared = { ...shared, name };
-                writeJson(activeKey(uid), shared);
-            }
-            pill.setLabel(name);
-        };
-        if (namedGarden) {
-            if (!shared) ownId = namedGarden.id;
-            renamed(namedGarden.id, namedGarden.name);
-            items.push({ label: 'Rename garden', onClick: () => new RenameGardenModal(namedGarden.name, async name => {
-                await renameGarden(supabase, namedGarden.id, name);
-                renamed(namedGarden.id, name);
-            }).open() });
-        }
-        if (ownSpace) {
-            items.push({ label: 'Share garden', onClick: () => new ShareGardenModal(supabase, ownSpace.id, ownSpace.name, name => renamed(ownSpace.id, name)).open() });
-            items.push({
-                label: 'Delete garden space',
-                danger: true,
-                onClick: () => new GardenQuestionModal(
-                    `Delete ${ownSpace.name}?`,
-                    'Its plants go too, for everyone who shares it.',
-                    'Delete',
-                    async () => {
-                        try {
-                            // Leave it first, so nothing saves into a row that is going away.
-                            await openGarden(uid, null);
-                            await deleteSpace(supabase, ownSpace.id);
-                            notify(host, `Deleted ${ownSpace.name}.`);
-                        } catch (e) {
-                            fail(e);
-                        }
-                    },
-                ).open(),
-            });
-        } else if (!shared) {
-            items.push({
-                label: 'Share garden',
-                onClick: async () => {
-                    let own = await ownGardenId(supabase, uid);
-                    if (!own) {
-                        // A fresh account has no row until its first save.
-                        await app.saveGardenData();
-                        own = await ownGardenId(supabase, uid);
-                    }
-                    if (!own) {
-                        notify(host, 'Could not share yet. Try again in a moment.');
-                        return;
-                    }
-                    new ShareGardenModal(supabase, own.id, own.name, name => renamed(own.id, name)).open();
-                },
-            });
-        } else {
-            const leaving = shared;
-            items.push({
-                label: 'Leave garden',
-                danger: true,
-                onClick: () => new GardenQuestionModal(`Leave ${leaving.name}?`, 'You can come back with a new link.', 'Leave', async () => {
-                    try {
-                        await removeMember(supabase, leaving.id, uid);
-                        notify(host, `Left ${leaving.name}.`);
-                        await openGarden(uid, null);
-                    } catch (e) {
-                        fail(e);
-                    }
-                }).open(),
-            });
-        }
         return [...items, ...common];
     });
 

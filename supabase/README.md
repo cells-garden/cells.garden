@@ -51,9 +51,9 @@ An owner shares their one garden by link. The link is `https://cells.garden/#joi
 - People who share a garden can read each other's `profiles.display_name`, nothing else.
 - Checked with simulated users against the live project: outsiders and anon see nothing, direct membership inserts and ownership changes are refused, members never see invite tokens.
 
-In the app: the pill menu lists shared gardens and offers Share garden (owner) or Leave garden (member). The chosen garden is remembered per account on each device. A garden that is no longer reachable falls back to the user's own with a notice.
+In the app: the pill menu lists the user's gardens, and the ⋯ on each one's row offers Share garden (owner) or Leave garden (member) for that garden. The chosen garden is remembered per account on each device. A garden that is no longer reachable falls back to the user's own with a notice.
 
-Garden spaces are gardens that belong to nobody's own account: New garden space in the pill menu makes one (`owner_id` set, `user_id` null), and its owner shares, renames or deletes it like any garden. Deleting takes its members and link with it.
+Garden spaces are gardens that belong to nobody's own account: the + after Gardens in the pill menu makes one (`owner_id` set, `user_id` null), and its owner shares, renames or deletes it like any garden. Deleting takes its members and link with it.
 
 Saves are compare-and-swap on `rev`. When someone wrote first, the client fetches their version and merges by plant and cell id (`src/core/merge.ts`), then retries. Still lost: the same field of the same cell changed by two people at once (the later save wins), and two different reorders of the same list.
 

@@ -3,11 +3,11 @@ import { CHANGELOG_SEEN_KEY, changelogDate, entriesNotShown, entriesToShow, type
 import { Modal } from '../core/ui';
 
 function read(key: string): string | null {
-    try { return localStorage.getItem(key); } catch { return null; }
+    try { return window.localStorage.getItem(key); } catch { return null; }
 }
 
 function write(key: string, value: string) {
-    try { localStorage.setItem(key, value); } catch { /* private mode: shown again next time */ }
+    try { window.localStorage.setItem(key, value); } catch { /* private mode: shown again next time */ }
 }
 
 /** "What's new": the commits deployed since this browser last looked. */

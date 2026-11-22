@@ -845,6 +845,23 @@ async function scenario(browser, errors) {
     console.log('active seed cell:', meta);
     assert(meta.active && meta.addDescription && meta.addTag && meta.description === null && meta.tags.length === 0,
         `selecting the name should offer a description and a tag: ${JSON.stringify(meta)}`);
+    // A press just under the active cell lands on what it was aimed at: the
+    // cell shrinks back only once the press has clicked, so Roots' "+" right
+    // below it opens a cell in Roots, not in whatever moved up into its place.
+    const activeHeight = await page.$eval(seedCell, (el) => el.getBoundingClientRect().height);
+    assert(activeHeight > 44, `the active cell is taller than the plain one: ${activeHeight}`);
+    await page.click(`${column(plantId)} .roots-zone .zone-add-btn`);
+    await page.waitForSelector(`${column(plantId)} .garden-item.is-draft`);
+    assert.deepEqual(await page.$$eval(`${column(plantId)} .garden-item.is-draft`, (els) => els.map((el) => el.closest('.garden-zone').classList[1])), ['roots-zone'],
+        'a click on the Roots "+" under an active seed cell opens a cell in Roots');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.garden-item.is-draft'));
+    // The cell folds away once the press is over (at most a moment after it lifts), never under the click.
+    await page.waitForFunction((cell) => !document.querySelector(cell)?.classList.contains('is-active'), `${column(plantId)} .seed-cell`, { timeout: 2000 }).catch(() => {});
+    meta = await seedMeta();
+    assert(!meta.active && !meta.meta, `that click ends the seed cell, once it has clicked: ${JSON.stringify(meta)}`);
+    await page.click(`${column(plantId)} .seed-content`);
+    assert((await seedMeta()).active);
     const descriptionField = `${seedCell} .seed-description-field`;
     await page.click(`${seedCell} .seed-description-add`);
     assert.deepEqual(await page.$eval(descriptionField, (el) => [el === document.activeElement, el.maxLength]), [true, 75], 'the description is written in place, at most 75 characters');
@@ -910,8 +927,10 @@ async function scenario(browser, errors) {
 
     // From the keyboard: focus on the name makes the cell active, Tab reaches
     // "+ tag", Escape closes its field again, and Tab on out of the cell ends it.
+    const seedActive = (active) => page.waitForFunction(({ sel, active }) => document.querySelector(sel)?.classList.contains('is-active') === active,
+        { sel: seedCell, active }, { timeout: 2000 });
     await page.focus(`${column(plantId)} .seed-content`);
-    assert((await seedMeta()).active, 'focus on the name makes the seed cell active');
+    await seedActive(true);
     for (let i = 0; i < 8 && (await seedMeta()).focused !== 'seed-tag-add'; i++) await page.keyboard.press('Tab');
     assert.equal((await seedMeta()).focused, 'seed-tag-add', 'Tab from the name reaches "+ tag"');
     await page.keyboard.press('Enter');
@@ -920,22 +939,23 @@ async function scenario(browser, errors) {
     meta = await seedMeta();
     assert(meta.field === null && meta.focused === 'seed-tag-add' && meta.active, `Escape closes the tag field and goes back to "+ tag": ${JSON.stringify(meta)}`);
     await page.keyboard.press('Tab');
-    assert(!(await seedMeta()).active, 'the focus leaving the seed cell ends it');
+    await seedActive(false).catch(() => assert.fail('the focus leaving the seed cell ends it'));
     assert.deepEqual(await storedMeta(), { description: 'Port the garden, step by step', tags: ['Side project'] }, 'the keyboard round changed nothing');
 
-    // The pill menu's Tags hides the tag's plants here, and the board says so.
-    assert(await page.$('.auth-pill'), 'the pill menu is where tags are hidden');
-    const pillTags = '.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))';
+    // A tag's chip opens its menu, in any build (one without accounts has no
+    // pill menu): hiding the tag takes every plant with it out of the garden
+    // and off the board, on this device only, and the board says so and
+    // brings them back.
     const hiddenPlant = (hidden, id = plantId) => page.waitForFunction(({ id, hidden }) => {
         const drawn = !!document.querySelector(`.garden-plant-wrapper[data-project-id="${id}"]`);
         return drawn !== hidden && !document.querySelector('.garden-render-stage') && !!document.querySelector('.kanban-hidden-note') === hidden;
     }, { id, hidden }, { timeout: 5000 });
-    await page.click('.auth-pill');
-    await page.click(pillTags);
-    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
+    const menuRows = () => page.$$eval('.garden-context-menu > .garden-menu-heading, .garden-context-menu > .garden-menu-item .garden-menu-label', (els) => els.map((e) => e.textContent));
+    const tagMenuRow = (label) => `.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("${label}"))`;
+    await page.click(`${seedCell} .seed-tag[data-tag="Side project"] .seed-tag-label`);
+    assert.deepEqual(await menuRows(), ['Side project', 'Hide in the garden', 'Remove from this plant'], "a tag's chip opens its menu");
+    await page.click(tagMenuRow('Hide in the garden'));
     await hiddenPlant(true);
-    assert.equal(await page.$eval(`${pillTags} .garden-menu-sub`, (el) => el.textContent), '1 hidden');
-    await page.keyboard.press('Escape');
     const whileHidden = await plantsShown();
     assert(!whileHidden.garden.includes(plantId) && !whileHidden.board.includes(plantId) && whileHidden.garden.length === allShown.garden.length - 1 && whileHidden.note === '1 plant hidden',
         `hiding a tag should take its plant out of the garden and off the board: ${JSON.stringify({ allShown, whileHidden })}`);
@@ -956,18 +976,24 @@ async function scenario(browser, errors) {
     await hiddenPlant(false);
     await settled();
     assert.deepEqual(await plantsShown(), allShown, 'showing the tag again brings both plants back');
-    await page.click(`${column(otherId)} .seed-content`);
-    await page.click(`${column(otherId)} .seed-tag[data-tag="Side project"] .seed-tag-remove`);
+    // The chip's menu takes the tag off its plant too.
+    await page.click(`${column(otherId)} .seed-tag[data-tag="Side project"] .seed-tag-label`);
+    await page.click(tagMenuRow('Remove from this plant'));
     await metaStored({ description: null, tags: null }, otherId);
+    assert.deepEqual((await seedMeta(otherId)).tags, [], 'the tag is gone from the chips');
     await pressOutside();
-    // Hidden and shown again from the pill alone.
-    await page.click('.auth-pill');
-    await page.click(pillTags);
-    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
-    await hiddenPlant(true);
-    await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
-    await hiddenPlant(false);
-    await page.keyboard.press('Escape');
+    // In a build with accounts, the pill menu's Tags hides and shows them too.
+    if (await page.$('.auth-pill')) {
+        const pillTags = '.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))';
+        await page.click('.auth-pill');
+        await page.click(pillTags);
+        await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
+        await hiddenPlant(true);
+        assert.equal(await page.$eval(`${pillTags} .garden-menu-sub`, (el) => el.textContent), '1 hidden');
+        await page.click('.garden-menu-panel.is-open [data-tag="Side project"]');
+        await hiddenPlant(false);
+        await page.keyboard.press('Escape');
+    }
     await settled();
     assert.deepEqual(await plantsShown(), allShown, 'showing the tag again should put the garden back as it was');
 
@@ -1399,17 +1425,18 @@ async function scenario(browser, errors) {
     const touch = async (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
     // A re-render swaps the garden in whole, so an element found a moment ago can be
     // gone by the time it is measured: look again until it holds still.
-    const center = async (sel) => {
+    // `down` is how far down the element to touch it, 0.5 its middle.
+    const center = async (sel, down = 0.5) => {
         for (let attempt = 0; attempt < 40; attempt++) {
             const el = await mpage.$(sel);
             const b = el ? await el.boundingBox() : null;
-            if (b) return [b.x + b.width / 2, b.y + b.height / 2];
+            if (b) return [b.x + b.width / 2, b.y + b.height * down];
             await mpage.waitForTimeout(50);
         }
         throw new Error(`${sel} never settled on screen`);
     };
-    const tapAt = async (sel) => {
-        const [x, y] = await center(sel);
+    const tapAt = async (sel, down = 0.5) => {
+        const [x, y] = await center(sel, down);
         await touch('touchStart', x, y);
         await touch('touchEnd', x, y);
         await mpage.waitForTimeout(120);
@@ -1590,7 +1617,7 @@ async function scenario(browser, errors) {
     assert(await mpage.$('.garden-context-menu') === null, 'choosing a seed by tap should close the menu');
 
     // Under the name, by touch: a tap on the name offers "Add a description"
-    // and "+ tag", each a finger's size, with fields iOS does not zoom into.
+    // and "+ tag", each 44px to press, with fields iOS does not zoom into.
     const phoneMeta = () => mpage.evaluate(seedMetaOf, '.kanban-scroll-container .seed-cell');
     const phoneStored = () => mpage.evaluate(() => {
         const p = JSON.parse(localStorage.getItem('cells.garden/v1')).projects[0];
@@ -1600,54 +1627,92 @@ async function scenario(browser, errors) {
         const p = JSON.parse(localStorage.getItem('cells.garden/v1')).projects[0];
         return JSON.stringify({ description: 'description' in p ? p.description : null, tags: 'tags' in p ? p.tags : null }) === JSON.stringify(expected);
     }, expected, { timeout: 5000 });
+    const rectOf = (sel) => mpage.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
     assert(!(await phoneMeta()).meta, 'a plain plant shows nothing under its name on a phone');
     await tapAt('.seed-content');
     await mpage.waitForSelector('.seed-cell.is-active');
     const phoneAdds = await mpage.evaluate(() => ['.seed-description-add', '.seed-tag-add'].map((s) => document.querySelector(s).getBoundingClientRect().height));
-    assert(phoneAdds.every((h) => h >= 28), `"Add a description" and "+ tag" should be a finger's size: ${phoneAdds}`);
+    assert(phoneAdds.every((h) => h >= 44), `"Add a description" and "+ tag" should be 44px to press: ${phoneAdds}`);
+    const addTagBefore = await rectOf('.seed-tag-add');
     await tapAt('.seed-description-add');
     await mpage.waitForSelector('.seed-description-field');
     assert.deepEqual(await mpage.$eval('.seed-description-field', (el) => [el === document.activeElement, parseFloat(getComputedStyle(el).fontSize) >= 16]), [true, true],
         'tapping "Add a description" opens its field, at 16px so iOS does not zoom');
+    assert.equal((await rectOf('.seed-tag-add')).top, addTagBefore.top, 'the description field stands where "Add a description" stood, and "+ tag" stays put');
     const phoneLong = 'Grows on the windowsill by the basil and the mint, where the light comes in early';
     const phoneCut = phoneLong.slice(0, 75).trim();
     await mpage.keyboard.type(phoneLong);
-    await mpage.keyboard.press('Enter');
+    // Without Done: a tap on "+ tag", low on it, keeps the description and opens the tag field.
+    await tapAt('.seed-tag-add', 0.9);
     await phoneWaitStored({ description: phoneCut, tags: null });
-    await tapAt('.seed-tag-add');
     await mpage.waitForSelector('.seed-tag-field');
     assert.deepEqual(await mpage.$eval('.seed-tag-field', (el) => [el === document.activeElement, parseFloat(getComputedStyle(el).fontSize) >= 16]), [true, true],
-        'tapping "+ tag" opens its field, at 16px');
+        'a tap low on "+ tag" with the description open opens the tag field, at 16px');
+    assert.equal((await phoneMeta()).description, phoneCut, 'the description shows in place of its field');
     await mpage.keyboard.type('Indoor');
     await mpage.keyboard.press('Enter');
     await mpage.keyboard.type('Herbs,');
     await phoneWaitStored({ description: phoneCut, tags: ['Indoor', 'Herbs'] });
+    await mpage.keyboard.press('Escape');
     let phoneCell = await phoneMeta();
     console.log('phone seed cell:', phoneCell);
-    assert(phoneCell.active && phoneCell.description === phoneCut && phoneCell.tags.join() === 'Indoor,Herbs' && phoneCell.removable.length === 2,
+    assert(phoneCell.active && phoneCell.description === phoneCut && phoneCell.tags.join() === 'Indoor,Herbs' && phoneCell.removable.length === 2 && phoneCell.field === null,
         `the description and both tags should show under the name: ${JSON.stringify(phoneCell)}`);
-    const removeSize = await mpage.$eval('.seed-tag[data-tag="Indoor"] .seed-tag-remove', (el) => el.getBoundingClientRect().toJSON());
-    assert(removeSize.width >= 28 && removeSize.height >= 28, `a tag's × should be a finger's size: ${JSON.stringify(removeSize)}`);
+    // Every control 44px tall to press, and a × well apart from "+ tag" and from the next tag.
+    const phoneTargets = await mpage.evaluate(() => {
+        const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+        const [indoor, herbs] = ['Indoor', 'Herbs'].map((tag) => ({
+            label: r(`.seed-tag[data-tag="${tag}"] .seed-tag-label`),
+            remove: r(`.seed-tag[data-tag="${tag}"] .seed-tag-remove`),
+        }));
+        const plus = r('.seed-tag-add');
+        return {
+            heights: [indoor.label.height, indoor.remove.height, herbs.remove.height, plus.height, r('.seed-cell.is-active .seed-description').height],
+            removeWidth: indoor.remove.width,
+            toPlus: plus.left - herbs.remove.right,
+            toNextTag: herbs.label.left - indoor.remove.right,
+        };
+    });
+    console.log('phone tap targets:', phoneTargets);
+    assert(phoneTargets.heights.every((h) => h >= 44) && phoneTargets.removeWidth >= 36 && phoneTargets.toPlus >= 12 && phoneTargets.toNextTag >= 12,
+        `every control under the name should be 44px to press, a × 12px from anything else: ${JSON.stringify(phoneTargets)}`);
     await shot(mpage, '04a-mobile-seed-tags.png');
     await tapAt('.seed-tag[data-tag="Indoor"] .seed-tag-remove');
     await phoneWaitStored({ description: phoneCut, tags: ['Herbs'] });
-    // A tap outside the cell (on the Roots label just below it) ends it; what was written stays.
-    await tapAt('.roots-zone .zone-label');
+    // A tap just under the active cell lands on what it was aimed at: the cell,
+    // taller while active, shrinks back only once the tap has clicked, so the
+    // Roots "+" right below it opens a cell in Roots.
+    await tapAt('.roots-zone .zone-add-btn');
+    await mpage.waitForSelector('.garden-item.is-draft');
+    assert.deepEqual(await mpage.$$eval('.garden-item.is-draft', (els) => els.map((el) => el.closest('.garden-zone').classList[1])), ['roots-zone'],
+        'a tap on the Roots "+" under an active seed cell opens a cell in Roots');
+    await mpage.keyboard.press('Escape');
+    await mpage.waitForFunction(() => !document.querySelector('.garden-item.is-draft'));
     phoneCell = await phoneMeta();
     assert(!phoneCell.active && phoneCell.description === phoneCut && phoneCell.tags.join() === 'Herbs' && phoneCell.removable.length === 0 && !phoneCell.addTag && phoneCell.field === null,
         `a tap outside should end the seed cell: ${JSON.stringify(phoneCell)}`);
-    // The pill menu's Tags hides the plant by touch, and shows it again.
+    // A tag's chip opens its menu by touch: hiding the tag hides the plant, and the board's note shows it again.
     const phoneHidden = (hidden) => mpage.waitForFunction((hidden) => !document.querySelector('.garden-render-stage')
         && !!document.querySelector('.kanban-scroll-container > .project-column') !== hidden
         && !!document.querySelector('.kanban-hidden-note') === hidden, hidden, { timeout: 5000 });
-    await tapAt('.auth-pill');
-    await tapAt('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))');
-    await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+    await tapAt('.seed-tag[data-tag="Herbs"] .seed-tag-label');
+    await tapAt('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Hide in the garden"))');
     await phoneHidden(true);
     assert.equal(await mpage.textContent('.kanban-hidden-note'), '1 plant hidden');
-    await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+    await tapAt('.kanban-hidden-note');
+    await tapAt('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Herbs"))');
     await phoneHidden(false);
-    await mpage.keyboard.press('Escape');
+    // In a build with accounts, the pill menu's Tags hides it by touch, and shows it again.
+    if (await mpage.$('.auth-pill')) {
+        await tapAt('.auth-pill');
+        await tapAt('.garden-context-menu > .garden-menu-item:has(.garden-menu-label:text-is("Tags"))');
+        await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+        await phoneHidden(true);
+        assert.equal(await mpage.textContent('.kanban-hidden-note'), '1 plant hidden');
+        await tapAt('.garden-menu-panel.is-open [data-tag="Herbs"]');
+        await phoneHidden(false);
+        await mpage.keyboard.press('Escape');
+    }
     assert.deepEqual(await phoneStored(), { description: phoneCut, tags: ['Herbs'] }, 'hiding a tag by touch leaves the plant as it is');
 
     // Drag the divider with a finger.

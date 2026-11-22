@@ -173,6 +173,46 @@ test('image paths stay lined up when only some cells have art', () => {
     assert.deepEqual(back.stem.map(i => i.imagePath), ['plant_1/stem/p1.png', undefined, 'plant_1/stem/p3.png']);
 });
 
+test('a plant\'s description and tags are written after its other keys and read back', () => {
+    const p = plant({ description: 'What the garden needs: "quotes", a \\ and 🌱', tags: ['Side project', 'Work'] });
+    const md = projectToMarkdown(p);
+    assert.match(md, /\nplantType: plant_1\ndescription: "What the garden needs: \\"quotes\\", a \\\\ and 🌱"\ntags: \["Side project", "Work"\]\nimages:\n/);
+    const back = roundTrip(p);
+    assert.equal(back.description, p.description);
+    assert.deepEqual(back.tags, ['Side project', 'Work']);
+});
+
+test('a plant without a description or tags stores no such field when it comes back', () => {
+    const back = roundTrip(plant({ description: '   ', tags: [] }));
+    assert.equal('description' in back, false);
+    assert.equal('tags' in back, false);
+    assert.doesNotMatch(projectToMarkdown(plant({ description: '' })), /description|tags/);
+});
+
+test('a description and tags written by hand are read as the board keeps them', () => {
+    const fileWith = (lines: string[]) => ['---', 'id: p', 'type: garden-cell', 'seed: "P"', ...lines, 'images: {}', '---', ''].join('\n');
+    const block = markdownToProject(fileWith([
+        `description:   ${'Far   too long, '.repeat(8)}`,
+        'tags:',
+        '  - Work',
+        '  - "  work "',
+        '  - 2026',
+        '  - { not: a tag }',
+        '  - ""',
+    ]), 'P');
+    assert.ok(block);
+    assert.equal(block.description, 'Far too long, '.repeat(8).slice(0, 75).trim());
+    assert.deepEqual(block.tags, ['Work', '2026']);
+
+    const line = markdownToProject(fileWith(['tags: Home,  Garden , ,home', 'description: 42']), 'P');
+    assert.deepEqual([line?.tags, line?.description], [['Home', 'Garden'], '42']);
+
+    const junk = markdownToProject(fileWith(['tags: { a: 1 }', 'description: [one, two]']), 'P');
+    assert.ok(junk);
+    assert.equal('tags' in junk, false);
+    assert.equal('description' in junk, false);
+});
+
 // --- Vault paths ----------------------------------------------------------
 
 test('art is written as a vault path and read back as a pack path', () => {

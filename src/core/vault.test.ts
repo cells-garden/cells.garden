@@ -220,6 +220,42 @@ test('merge updates a plant that came from here and plants the rest after it', (
     assert.equal(next.projects[0].hue, 200);
 });
 
+test('a description and tags come back with an export, merged or replacing', () => {
+    const own = garden([
+        plant({ id: 'a', seed: 'Alpha', description: 'The first one', tags: ['Work', 'Side project'] }),
+        plant({ id: 'b', seed: 'Beta', order: 1 }),
+    ]);
+    const files = vaultFilesToGarden(gardenToVaultFiles(own));
+    assert.deepEqual(files.projects.map(p => [p.description, p.tags]), [['The first one', ['Work', 'Side project']], [undefined, undefined]]);
+
+    // Over a garden that lost them since: the file puts them back either way.
+    const bare = garden([plant({ id: 'a', seed: 'Alpha' }), plant({ id: 'b', seed: 'Beta', order: 1 })]);
+    for (const mode of ['merge', 'replace'] as const) {
+        const { garden: next } = mergeGarden(bare, files, mode);
+        assert.deepEqual(next.projects.map(p => [p.id, p.description, p.tags]), [['a', 'The first one', ['Work', 'Side project']], ['b', undefined, undefined]], mode);
+    }
+});
+
+test('merging a file that says nothing of a description or tags keeps the plant\'s own', () => {
+    // Max's plugin never writes them, and neither did an export from before them.
+    const current = garden([
+        plant({ id: 'a', seed: 'Alpha', description: 'Kept', tags: ['Work'] }),
+        plant({ id: 'b', seed: 'Beta', order: 1, description: 'Replaced', tags: ['Old'] }),
+    ]);
+    const { garden: next } = mergeGarden(current, importOf([
+        plant({ id: 'a', seed: 'Alpha, edited' }),
+        plant({ id: 'b', seed: 'Beta', description: 'From the file', tags: ['New'] }),
+    ]), 'merge');
+    assert.deepEqual(next.projects.map(p => [p.seed, p.description, p.tags]), [
+        ['Alpha, edited', 'Kept', ['Work']],
+        ['Beta', 'From the file', ['New']],
+    ]);
+    // Replacing is restoring a backup: the files are the garden, words and all.
+    const { garden: replaced } = mergeGarden(current, importOf([plant({ id: 'a', seed: 'Alpha' })]), 'replace');
+    assert.equal('description' in replaced.projects[0], false);
+    assert.equal('tags' in replaced.projects[0], false);
+});
+
 test('merge keeps the settings this device is using', () => {
     const current = garden([], { ...DEFAULT_SETTINGS, fireflyCount: 2 });
     const incoming = { ...importOf([]), settings: { ...DEFAULT_SETTINGS, fireflyCount: 30 } };

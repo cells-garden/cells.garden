@@ -697,7 +697,7 @@
     max-width: 100%;
     height: 18px;
     box-sizing: border-box;
-    padding: 0 7px;
+    padding: 0;
     border-radius: 999px;
     background: var(--background-modifier-hover);
     color: var(--text-muted);
@@ -706,10 +706,35 @@
     white-space: nowrap;
 }
 
-.seed-tag-label {
+/* The tag's name is the button for its menu (hide its plants, take it off),
+   the whole chip but for its ×. */
+.seed-meta .seed-tag-label {
+    display: block;
+    align-self: stretch;
     min-width: 0;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0 7px;
     overflow: hidden;
     text-overflow: ellipsis;
+    border: none;
+    border-radius: inherit;
+    background: transparent;
+    box-shadow: none;
+    color: inherit;
+    font: inherit;
+    line-height: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.seed-meta .seed-tag-label:hover {
+    color: var(--text-normal);
+}
+
+.seed-cell.is-active .seed-meta .seed-tag-label {
+    padding-right: 3px;
 }
 
 .seed-meta .seed-tag-remove {
@@ -720,7 +745,7 @@
     width: 14px;
     min-width: 14px;
     height: 14px;
-    margin: 0 -4px 0 3px;
+    margin: 0 3px 0 0;
     padding: 0;
     border: none;
     border-radius: 50%;
@@ -1269,40 +1294,97 @@
         -webkit-user-select: none;
     }
 
-    /* Under the name, a little larger, and every control a finger's size. */
+    /* Under the name, a little larger. While the cell is active, every control
+       there is 44px tall to press, drawn smaller inside it, and so is each of
+       its rows, whatever stands in it: a field opening or closing moves
+       nothing. The tags stand 12px apart, so a tap a little off "+ tag" or a
+       tag's name does not land on a ×, which takes its tag off at once. */
     .seed-cell > .seed-meta {
         font-size: 12px;
     }
 
+    .seed-cell.is-active > .seed-meta {
+        gap: 0;
+    }
+
+    /* Its line or two in the middle, as "Add a description" sits in its 44px. */
+    .seed-cell.is-active .seed-description {
+        min-height: 44px;
+        align-content: center;
+    }
+
     .seed-meta .seed-description-add,
     .seed-meta .seed-tag-add {
-        height: 28px;
+        height: 44px;
         font-size: 12px;
     }
 
+    /* "+ tag" draws its dashed pill 28px tall in the middle of its 44px. */
     .seed-meta .seed-tag-add {
-        padding: 0 10px;
+        position: relative;
+        margin-left: 4px;
+        padding: 0 12px;
+        border: none;
+    }
+
+    .seed-meta .seed-tag-add::before {
+        content: '';
+        position: absolute;
+        inset: 8px 0;
+        border: 1px dashed var(--background-modifier-border);
+        border-radius: 999px;
+        pointer-events: none;
     }
 
     .seed-tag {
         height: 24px;
-        padding: 0 9px;
         font-size: 12px;
     }
 
-    /* 28px to press, in a chip that stays 24px tall. */
+    .seed-meta .seed-tag-label {
+        padding: 0 9px;
+    }
+
+    .seed-cell.is-active .seed-tags {
+        gap: 0 12px;
+    }
+
+    /* An active cell's chip is 44px to press, its pill 24px in the middle of it. */
+    .seed-cell.is-active .seed-tag {
+        position: relative;
+        z-index: 0;
+        height: 44px;
+        background: transparent;
+    }
+
+    .seed-cell.is-active .seed-tag::before {
+        content: '';
+        position: absolute;
+        inset: 10px 0;
+        z-index: -1;
+        border-radius: 999px;
+        background: var(--background-modifier-hover);
+        pointer-events: none;
+    }
+
+    .seed-cell.is-active .seed-meta .seed-tag-label {
+        padding: 0 2px 0 10px;
+        line-height: 44px;
+    }
+
     .seed-meta .seed-tag-remove {
-        width: 28px;
-        min-width: 28px;
-        height: 28px;
-        margin: -2px -9px -2px 0;
+        width: 36px;
+        min-width: 36px;
+        height: 44px;
+        margin: 0;
+        border-radius: 0 999px 999px 0;
         font-size: 16px;
     }
 
     /* iOS zooms into any field under 16px when it gains focus. */
     .seed-meta .seed-description-field,
     .seed-meta .seed-tag-field {
-        padding: 3px 6px;
+        padding: 0 6px;
         font-size: 16px;
         -webkit-user-select: text;
         user-select: text;
@@ -1310,7 +1392,13 @@
 
     .seed-meta .seed-description-field {
         width: calc(100% + 14px);
+        height: 44px;
         margin-left: -7px;
+    }
+
+    .seed-meta .seed-tag-field {
+        height: 36px;
+        margin: 4px 0;
     }
 
     .garden-item.draggable-cell {

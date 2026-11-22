@@ -206,8 +206,11 @@ export function mergeGarden(
     for (const incoming of result.projects) {
         const existing = byId.get(incoming.id);
         if (existing) {
-            // Keep the column where it is; the file decides everything else.
-            merged[merged.indexOf(existing)] = { ...incoming, order: existing.order };
+            // Keep the column where it is; the file decides everything else,
+            // but for the words under the plant's name when it has none: Max's
+            // plugin never writes them, nor did an export from before they were
+            // written, and such a file is no reason to lose them.
+            merged[merged.indexOf(existing)] = { ...incoming, ...wordsKept(existing, incoming), order: existing.order };
             updated++;
         } else {
             merged.push({ ...incoming, order: ++lastColumn });
@@ -218,6 +221,14 @@ export function mergeGarden(
     return {
         garden: { ...current, projects: renumber(merged), settings: current.settings },
         summary: { added, updated },
+    };
+}
+
+/** The description and tags a plant has here that the file merged over it says nothing of. */
+function wordsKept(existing: ProjectData, incoming: ProjectData): Pick<ProjectData, 'description' | 'tags'> {
+    return {
+        ...(incoming.description === undefined && existing.description !== undefined ? { description: existing.description } : {}),
+        ...(incoming.tags === undefined && existing.tags !== undefined ? { tags: existing.tags } : {}),
     };
 }
 

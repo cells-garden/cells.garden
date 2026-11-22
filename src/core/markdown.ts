@@ -17,11 +17,17 @@
  *    adds the prefix, import strips it, so the two sides read each other.
  *  - **Line breaks in a cell.** One list item is one line. Anything multi-line
  *    is flattened to spaces, as the plugin already does for the seed.
+ *
+ * A plant's description and tags are ours too: written only when the plant has
+ * them, so every other plant keeps the plugin's bytes, and the plugin passes
+ * over keys it does not know.
  */
 import { parseDocument } from 'yaml';
 import { assigneesOf } from './assign';
+import { descriptionOf } from './description';
 import type { LayerItem, ProjectData } from './model';
 import { simpleHash } from './model';
+import { tagsOf } from './tags';
 
 /** The vault folder Max's plugin scans for art. */
 export const ASSET_FOLDER = 'Garden-Assets';
@@ -68,6 +74,17 @@ function stringifyProjectFrontmatter(p: ProjectData): string {
     }
     if (p.standby) {
         yaml += `standby: true\n`;
+    }
+    // What the board writes under the plant's name, so an export and its import
+    // bring them back. A list in `tags` is also what Obsidian reads as the
+    // note's own tags.
+    const description = descriptionOf(p);
+    if (description) {
+        yaml += `description: ${yamlString(description)}\n`;
+    }
+    const tags = tagsOf(p);
+    if (tags.length > 0) {
+        yaml += `tags: [${tags.map(yamlString).join(', ')}]\n`;
     }
 
     // Image paths as ordered arrays; the index matches the body list order.
@@ -140,6 +157,10 @@ interface Frontmatter {
     hue?: number;
     order?: number;
     plantType?: string;
+    /** The line under the plant's name. Ours; absent from the plugin's files. */
+    description?: unknown;
+    /** The plant's tags: a list, or one line of them split by commas. Ours too. */
+    tags?: unknown;
     images?: Record<string, string[]>;
     /** Per zone, per cell: the account ids it is assigned to. Ours; absent from the plugin's files. */
     assignees?: Record<string, unknown>;
@@ -166,6 +187,28 @@ function parseFrontmatter(src: string): Frontmatter | null {
     if (problem) throw problem;
     const data: unknown = doc.toJS();
     return data as Frontmatter | null;
+}
+
+/** A frontmatter value that is plain text, a number read as one included; anything else is nothing. */
+function textOf(value: unknown): string | undefined {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return undefined;
+}
+
+/**
+ * The description and tags a plant file carries, cleaned as the board keeps
+ * them; a key is left out when there is nothing in it, so the plant stores no
+ * empty field.
+ */
+function ownWordsOf(fm: Frontmatter): Pick<ProjectData, 'description' | 'tags'> {
+    const description = descriptionOf({ description: textOf(fm.description) });
+    const listed = Array.isArray(fm.tags) ? fm.tags : typeof fm.tags === 'string' ? fm.tags.split(',') : [];
+    const tags = tagsOf({ tags: listed.map(textOf).filter((t): t is string => t !== undefined) });
+    return {
+        ...(description ? { description } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
+    };
 }
 
 /** Unique enough that two id-less files imported in the same millisecond differ. */
@@ -288,6 +331,7 @@ export function markdownToProject(contents: string, basename: string): ProjectDa
         hue: typeof fm.hue === 'number' ? fm.hue : 0,
         order: typeof fm.order === 'number' ? fm.order : 0,
         plantType: fm.plantType || 'plant_1',
+        ...ownWordsOf(fm),
         roots,
         stem,
         flowers,

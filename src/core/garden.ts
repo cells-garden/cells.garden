@@ -90,6 +90,10 @@ const WORM_LENGTH = 7;
 const MAX_FIREFLIES = 64;
 // Numbers the tag fields' suggestion lists, so no two on a page share an id.
 let seedFieldCount = 0;
+// How long after a press lifts its click may still come (a tap's click comes
+// once the browser has seen the tap, a little after the finger lifts). A press
+// that brings none, a hold or a drag, is taken as over after this.
+const SEED_CLICK_WAIT_MS = 500;
 
 /** Cancel a timer or interval and hand back null, so `x = stop(x)` clears it. */
 function stop(handle: number | null): null {
@@ -4347,13 +4351,27 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
     // looks as it always has. Selecting the name, or moving the focus into the
     // cell, makes the cell active (is-active): it then also offers "Add a
     // description" and "+ tag", and a × on each tag. A press anywhere outside
-    // the cell, or the focus landing somewhere outside it, ends that again.
+    // the cell, or the focus landing somewhere outside it, ends that again. A
+    // tag's chip opens its menu: hide the plants with it on this device, the
+    // way the pill menu's Tags does (a build without accounts has no pill), or
+    // take it off this plant.
     //
     // It is a press, not the focus, that ends it on a touch screen. iOS gives a
     // tapped button no focus, so tapping "+ tag" takes the focus off the name
     // without putting it anywhere; were that the end of the cell, "+ tag" would
     // be gone before the tap reached it. So focus that goes nowhere leaves the
     // cell as it is.
+    //
+    // Nothing here changes the cell's size while a press is under way. The
+    // cell grows as it starts and shrinks as it ends, and a field is not the
+    // height of the text it stands in for, so what stands below them moves. A
+    // press and its click land on what is under them each time, so moved in
+    // between, the click is lost or goes to something else: a tap on Roots'
+    // "+" just under the cell would open a cell in Minerals, a tap on "+ tag"
+    // with the description still open would only close the description. So
+    // each such change waits until the press is over and its click has found
+    // what it clicks (afterSeedPress). A key has no press: Enter and Escape
+    // close a field at once, and the focus moving with Tab a moment later.
     //
     // Every change is saved at once, the way a new name is (renameSeed), and
     // drawn into this cell alone. Only a tag hidden on this device draws the
@@ -4362,18 +4380,19 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
 
     /** The plant whose seed cell is active, so a redraw of the board draws it active again. */
     private _activeSeedId: string | null = null;
-    /** The document watched for presses outside the active seed cell, once one has been active. */
+    /** The document whose presses are watched (watchSeedPointer), from the first drawing of the board. */
     private _seedWatchDoc: Document | null = null;
+    /** The pointers pressed down on that document now, so a change of a seed cell's size can wait for them. */
+    private readonly _seedPresses = new Set<number>();
 
     private activateSeed(cell: HTMLElement, projectId: string) {
         if (this._activeSeedId === projectId && cell.hasClass('is-active')) return;
         this.deactivateSeed();
         cell.addClass('is-active');
         this._activeSeedId = projectId;
-        this.watchSeedPointer(cell.ownerDocument);
     }
 
-    /** End the active seed cell. A field still open in it closes, and keeps what was written in it. */
+    /** End the active seed cell, at once. A field still open in it closes, and keeps what was written in it. */
     private deactivateSeed() {
         this._activeSeedId = null;
         const doc = this._seedWatchDoc ?? this.containerEl.ownerDocument;
@@ -4384,25 +4403,86 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
         }
     }
 
+    /** End this plant's seed cell once the press under way is over, unless another cell has been made active by then. */
+    private deactivateSeedAfterPress(projectId: string) {
+        this.afterSeedPress(() => {
+            if (this._activeSeedId === projectId) this.deactivateSeed();
+        });
+    }
+
+    /**
+     * Run `then` once the press now under way is over and the click it brings
+     * has found what it clicks: a change of size after that moves nothing out
+     * from under it. A press that brings no click (a hold, a drag, a swipe the
+     * browser takes for a scroll) is over a moment after it lifts. With no
+     * press down, `then` runs once the event at hand is done: a key, or the
+     * focus moving as a tap's click arrives, which comes after the finger has
+     * lifted, with the click itself still to come in the same go.
+     */
+    private afterSeedPress(then: () => void) {
+        const doc = this._seedWatchDoc ?? this.containerEl.ownerDocument;
+        const win = doc.defaultView ?? window;
+        if (this._seedPresses.size === 0) {
+            win.setTimeout(then, 0);
+            return;
+        }
+        let lifted: number | null = null;
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            if (lifted !== null) win.clearTimeout(lifted);
+            doc.removeEventListener('click', onClick, true);
+            doc.removeEventListener('pointerup', onUp, true);
+            doc.removeEventListener('pointercancel', onCancel, true);
+            then();
+        };
+        // By the time a click reaches the document, what it clicks is settled.
+        const onClick = () => win.setTimeout(finish, 0);
+        const onUp = () => {
+            if (lifted !== null) win.clearTimeout(lifted);
+            lifted = win.setTimeout(finish, SEED_CLICK_WAIT_MS);
+        };
+        const onCancel = () => win.setTimeout(finish, 0);
+        doc.addEventListener('click', onClick, true);
+        doc.addEventListener('pointerup', onUp, true);
+        doc.addEventListener('pointercancel', onCancel, true);
+    }
+
     private onSeedPointerDown = (e: PointerEvent) => {
-        if (this._activeSeedId === null) return;
+        // A first finger or a mouse press starts afresh: a release that was never seen
+        // (it happened outside the window) leaves no press behind that is still down.
+        if (e.isPrimary) this._seedPresses.clear();
+        this._seedPresses.add(e.pointerId);
+        const id = this._activeSeedId;
+        if (id === null) return;
         const target = e.target as Element | null;
         if (target?.closest?.('.seed-cell.is-active')) return;
-        this.deactivateSeed();
+        this.deactivateSeedAfterPress(id);
     };
 
-    /** One listener on the document, put there when a seed cell is first active and taken off with the view. */
+    private onSeedPointerUp = (e: PointerEvent) => {
+        this._seedPresses.delete(e.pointerId);
+    };
+
+    /** The presses on the board's document, watched from its first drawing until the view closes. */
     private watchSeedPointer(doc: Document) {
         if (this._seedWatchDoc === doc) return;
         this.unwatchSeedPointer();
-        // Capturing, so a control that keeps its press to itself still ends the cell.
+        // Capturing, so a control that keeps its press to itself is still seen.
         doc.addEventListener('pointerdown', this.onSeedPointerDown, true);
+        doc.addEventListener('pointerup', this.onSeedPointerUp, true);
+        doc.addEventListener('pointercancel', this.onSeedPointerUp, true);
         this._seedWatchDoc = doc;
     }
 
     private unwatchSeedPointer() {
-        this._seedWatchDoc?.removeEventListener('pointerdown', this.onSeedPointerDown, true);
+        const doc = this._seedWatchDoc;
+        doc?.removeEventListener('pointerdown', this.onSeedPointerDown, true);
+        doc?.removeEventListener('pointerup', this.onSeedPointerUp, true);
+        doc?.removeEventListener('pointercancel', this.onSeedPointerUp, true);
         this._seedWatchDoc = null;
+        this._seedPresses.clear();
     }
 
     /** Give a plant a new description, or none, saved at once like a new name (renameSeed). */
@@ -4416,7 +4496,8 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
     /**
      * Put a tag on a plant or take it off, saved at once. False when the tag
      * is one hidden on this device: the plant goes out of sight, and the
-     * garden is drawn again without it, as hiding the tag does.
+     * garden is drawn again without it, as hiding the tag does, once any
+     * press is over.
      */
     private keepTag(project: ProjectData, tag: string, on: boolean): boolean {
         const live = this.live(project);
@@ -4425,7 +4506,7 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
         if (live !== project) setTag(project, tag, on);
         if (on && isHidden(live, this.app.hiddenTags)) {
             this._activeSeedId = null;
-            void this.save();
+            this.afterSeedPress(() => void this.save());
             return false;
         }
         void this.app.saveGardenData();
@@ -4472,11 +4553,35 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             mark();
         };
 
+        /** A tag's own menu, from its chip: hide every plant with it here, or take it off this plant. */
+        const tagMenu = (tag: string, chip: HTMLElement) => {
+            openMenu([
+                { label: tag, heading: true },
+                {
+                    label: 'Hide in the garden',
+                    sub: 'This device',
+                    onClick: () => {
+                        this._activeSeedId = null;
+                        this.app.setTagHidden(tag, true);
+                    },
+                },
+                { label: 'Remove from this plant', onClick: () => takeOff(tag, chip) },
+            ], chip, doc);
+        };
+
         // Made in the cell's own document (a popped-out window has its own); drawTags puts it in place.
         const chipFor = (tag: string) => {
             const chip = tags.createSpan({ cls: 'seed-tag' });
             chip.dataset.tag = tag;
-            chip.createSpan({ cls: 'seed-tag-label', text: tag });
+            const label = chip.createEl('button', {
+                cls: 'seed-tag-label',
+                text: tag,
+                attr: { type: 'button', 'aria-haspopup': 'menu', title: `Hide or remove ${tag}` },
+            });
+            label.onclick = (e) => {
+                e.stopPropagation();
+                tagMenu(tag, chip);
+            };
             const remove = chip.createEl('button', {
                 cls: 'seed-tag-remove',
                 text: '×',
@@ -4508,7 +4613,7 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             mark();
         };
 
-        /** Take a tag off. A keyboard that was on its × goes on to the next ×, or to "+ tag". */
+        /** Take a tag off. A keyboard that was on its chip goes on to the next ×, or to "+ tag". */
         const takeOff = (tag: string, chip: HTMLElement) => {
             const held = chip.contains(doc.activeElement);
             const at = Array.from(tags.querySelectorAll(':scope > .seed-tag')).indexOf(chip);
@@ -4518,19 +4623,6 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             const next = tags.querySelectorAll<HTMLElement>(':scope > .seed-tag .seed-tag-remove')[at];
             (next ?? addTag).focus();
         };
-
-        // Whether a press began in this part of the cell and is not over yet, and a way to wait for its end.
-        let pressing = false;
-        const release = () => { pressing = false; };
-        meta.addEventListener('pointerdown', () => {
-            pressing = true;
-            doc.addEventListener('pointerup', release, { once: true });
-            doc.addEventListener('pointercancel', release, { once: true });
-        });
-        // A click follows the release in the same task, so a timeout runs after it.
-        const afterPress = (then: () => void) => doc.addEventListener('pointerup', () => {
-            (doc.defaultView ?? window).setTimeout(then, 0);
-        }, { once: true });
 
         // --- Writing the description, in place of the text ---
         const editDescription = () => {
@@ -4550,22 +4642,29 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             field.value = descriptionOf(this.live(project));
             meta.insertBefore(field, tags);
             let open = true;
-            /** Close the field, keeping what was written or not. From a key, the focus goes back to the text or its button. */
+            /**
+             * Close the field, keeping what was written or not. From a key it goes
+             * at once, and the focus goes back to the text or its button; left for
+             * a press (a tap on "+ tag", on a ×, anywhere), what was written is kept
+             * at once and the text takes the field's place once that press is over.
+             */
             const close = (keep: boolean, refocus: boolean) => {
                 if (!open) return;
                 open = false;
                 if (keep) this.keepDescription(project, field.value);
                 const swap = () => {
+                    // Back in it before it went: it stays open, its text already kept.
+                    if (!refocus && field.isConnected && doc.activeElement === field) {
+                        open = true;
+                        return;
+                    }
                     field.remove();
                     meta.removeClass('is-describing');
                     drawDescription();
                     if (refocus) (descriptionOf(this.live(project)) ? description : addDescription).focus();
                 };
-                // A mouse press on the tags below took the focus: the text, a line taller or
-                // shorter than the field, would move them before the press became a click.
-                // The field goes once the press is over.
-                if (pressing) afterPress(swap);
-                else swap();
+                if (refocus) swap();
+                else this.afterSeedPress(swap);
             };
             field.addEventListener('keydown', (e) => {
                 if (e.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) return;
@@ -4623,19 +4722,35 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
                 }
             };
             let open = true;
-            /** Close the field. Kept, what is still in it goes on as a tag too; from a key, the focus goes back to "+ tag". */
+            /**
+             * Close the field. Kept, what is still in it goes on as a tag too. From a
+             * key it goes at once and the focus goes back to "+ tag"; left for a
+             * press, the tag goes on at once and the field gives its place back
+             * once that press is over, as the description's does.
+             */
             const close = (keep: boolean, refocus: boolean) => {
                 if (!open) return;
                 open = false;
-                const rest = field.value;
-                field.remove();
-                suggestions.remove();
-                tags.removeClass('is-adding');
-                if (keep && rest.trim()) {
-                    if (!put([rest])) return;
+                const rest = keep ? field.value : '';
+                field.value = '';
+                // The plant went out of sight: the garden is being drawn without it.
+                if (rest.trim() && !put([rest])) return;
+                const swap = () => {
+                    // Back in it before it went: it stays, ready for the next tag.
+                    if (!refocus && field.isConnected && doc.activeElement === field) {
+                        open = true;
+                        drawTags();
+                        suggest();
+                        return;
+                    }
+                    field.remove();
+                    suggestions.remove();
+                    tags.removeClass('is-adding');
                     drawTags();
-                }
-                if (refocus) addTag.focus();
+                    if (refocus) addTag.focus();
+                };
+                if (refocus) swap();
+                else this.afterSeedPress(swap);
             };
             /** Put tags on the plant. False when one of them hid it here: the garden is being drawn without it. */
             const put = (texts: string[]): boolean => {
@@ -4647,7 +4762,10 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
             };
             /** Put tags on and keep the field open for the next one, unless the plant just went out of sight. */
             const putAndGoOn = (texts: string[]) => {
-                if (!put(texts)) return close(false, false);
+                if (!put(texts)) {
+                    open = false;
+                    return;
+                }
                 drawTags();
                 suggest();
             };
@@ -4821,13 +4939,18 @@ private _splitRatio = 0.5; // persisted divider position (0 = top, 1 = bottom)
 
         // --- The description and tags under the name, and when the cell is active ---
         this.createSeedMeta(seedCell, project);
+        this.watchSeedPointer(seedCell.ownerDocument);
         if (this._activeSeedId === project.id) seedCell.addClass('is-active');
-        seedCell.addEventListener('focusin', () => this.activateSeed(seedCell, project.id));
+        // Both wait for the press that moved the focus, if any (see the note above activateSeed):
+        // a chip pressed in a cell that is not active yet must not move before its click.
+        seedCell.addEventListener('focusin', () => this.afterSeedPress(() => {
+            if (seedCell.isConnected && seedCell.contains(seedCell.ownerDocument.activeElement)) this.activateSeed(seedCell, project.id);
+        }));
         seedCell.addEventListener('focusout', (e) => {
             const next = e.relatedTarget as Node | null;
-            // Focus that goes nowhere is left to the press that took it (see the note above activateSeed).
+            // Focus that goes nowhere is left to the press that took it.
             if (!next || seedCell.contains(next)) return;
-            if (seedCell.hasClass('is-active')) this.deactivateSeed();
+            if (this._activeSeedId === project.id) this.deactivateSeedAfterPress(project.id);
         });
         // Escape on the name puts the cell back as it was; the shortcut lets go of the focus.
         seedCell.addEventListener('keydown', (e) => {

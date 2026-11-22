@@ -2,12 +2,94 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 
 const FILE_KEY = 'WJgKfsKcxUpuNkDvxI9gEx';
 const ROOT = process.cwd();
 
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const need = (ok, message) => { if (!ok) throw new Error(message); };
+const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+/**
+ * A PNG's pixels as RGBA, one byte each, for comparing two drawings rather
+ * than two encodings of one: Figma does not promise the same bytes for the
+ * same picture. Fully transparent pixels count as transparent black, whatever
+ * colour they carry. Null for what this does not read (not 8 bits per
+ * channel, interlaced, or broken); compare bytes then.
+ */
+export function pngPixels(bytes) {
+    try {
+        if (!Buffer.isBuffer(bytes) || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return null;
+        let pos = 8, width = 0, height = 0, depth = 0, type = -1, interlace = 0, palette = null, alphas = null;
+        const data = [];
+        while (pos + 8 <= bytes.length) {
+            const length = bytes.readUInt32BE(pos);
+            const kind = bytes.toString('ascii', pos + 4, pos + 8);
+            const chunk = bytes.subarray(pos + 8, pos + 8 + length);
+            pos += 12 + length;
+            if (kind === 'IHDR') { width = chunk.readUInt32BE(0); height = chunk.readUInt32BE(4); depth = chunk[8]; type = chunk[9]; interlace = chunk[12]; }
+            else if (kind === 'PLTE') palette = chunk;
+            else if (kind === 'tRNS') alphas = chunk;
+            else if (kind === 'IDAT') data.push(chunk);
+            else if (kind === 'IEND') break;
+        }
+        const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[type];
+        if (depth !== 8 || interlace !== 0 || !channels || !width || !height || (type === 3 && !palette)) return null;
+        const raw = inflateSync(Buffer.concat(data));
+        const stride = width * channels;
+        if (raw.length < height * (stride + 1)) return null;
+        const rgba = new Uint8Array(width * height * 4);
+        let previous = new Uint8Array(stride);
+        for (let y = 0; y < height; y++) {
+            const filter = raw[y * (stride + 1)];
+            const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+            const row = new Uint8Array(stride);
+            for (let x = 0; x < stride; x++) {
+                const a = x >= channels ? row[x - channels] : 0;
+                const b = previous[x];
+                const c = x >= channels ? previous[x - channels] : 0;
+                let value = line[x];
+                if (filter === 1) value += a;
+                else if (filter === 2) value += b;
+                else if (filter === 3) value += (a + b) >> 1;
+                else if (filter === 4) {
+                    const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+                    value += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+                }
+                row[x] = value & 255;
+            }
+            for (let x = 0; x < width; x++) {
+                const i = x * channels;
+                let r, g, b, alpha = 255;
+                if (type === 6) [r, g, b, alpha] = [row[i], row[i + 1], row[i + 2], row[i + 3]];
+                else if (type === 2) [r, g, b] = [row[i], row[i + 1], row[i + 2]];
+                else if (type === 4) [r, g, b, alpha] = [row[i], row[i], row[i], row[i + 1]];
+                else if (type === 0) r = g = b = row[i];
+                else {
+                    const k = row[i];
+                    [r, g, b] = [palette[k * 3], palette[k * 3 + 1], palette[k * 3 + 2]];
+                    alpha = alphas && k < alphas.length ? alphas[k] : 255;
+                }
+                const o = (y * width + x) * 4;
+                if (alpha === 0) r = g = b = 0;
+                rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = alpha;
+            }
+            previous = row;
+        }
+        return { width, height, rgba };
+    } catch {
+        return null;
+    }
+}
+
+/** Whether two PNGs show the same picture (pngPixels), else whether they are the same bytes. */
+export function samePicture(a, b) {
+    const one = pngPixels(a);
+    const other = pngPixels(b);
+    if (!one || !other) return sha256(a) === sha256(b);
+    return one.width === other.width && one.height === other.height && Buffer.from(one.rgba).equals(Buffer.from(other.rgba));
+}
 
 function walk(node, result = []) {
     result.push(node);
@@ -181,6 +263,58 @@ export function discoverReadyPlants(file, index, existingFolders = [], wanted = 
     return plans;
 }
 
+/**
+ * The sprites of the families looked at (marked Ready for dev, or `wanted`)
+ * that the garden already has, each with the file it has them in. Their
+ * pictures are compared with Figma's on every run, so a drawing changed in
+ * place, in the same component, still reaches the garden.
+ */
+export function keptSprites(file, index, wanted = new Set()) {
+    const page = (file.document?.children || []).find(node => node.id === '27:1966' || node.name === 'ASSETS');
+    if (!page) return [];
+    const bySource = new Map(index.assets.filter(asset => asset.sourceNodeId && typeOfPath(asset.path)).map(asset => [asset.sourceNodeId, asset]));
+    const kept = [];
+    for (const family of walk(page)) {
+        if (!(family.type === 'FRAME' || family.type === 'COMPONENT_SET') || !/^Source\/Plants\//.test(family.name || '')) continue;
+        const displayName = family.name.slice('Source/Plants/'.length).trim();
+        if (family.devStatus?.type !== 'READY_FOR_DEV' && !wanted.has(plantKey(displayName))) continue;
+        for (const { source, category, variant } of plantParts(family)) {
+            const asset = bySource.get(source.id);
+            if (!asset) continue;
+            const size = nativeSize(source);
+            if (!(Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0)) continue;
+            kept.push({ plantType: typeOfPath(asset.path), displayName, familyNodeId: family.id, path: asset.path, category, variant,
+                replaces: true, sourceNodeId: source.id, sourceName: source.name, width: size.width, height: size.height,
+                exportNodeId: source.id, exportName: source.name });
+        }
+    }
+    return kept;
+}
+
+/** Figma's PNGs of these sprites at their own size, checked, by exportNodeId. Asked for a few dozen at a time. */
+async function renderSprites(sprites, { fileKey, headers, fetcher }) {
+    const pictures = new Map();
+    for (let start = 0; start < sprites.length; start += 50) {
+        const batch = sprites.slice(start, start + 50);
+        const ids = [...new Set(batch.map(sprite => sprite.exportNodeId))];
+        const imageResponse = await fetcher(`https://api.figma.com/v1/images/${fileKey}?ids=${ids.map(id => encodeURIComponent(id)).join(',')}&format=png&scale=1`, { headers });
+        need(imageResponse.ok, `Figma image export failed: HTTP ${imageResponse.status}`);
+        const imageData = await imageResponse.json();
+        for (const sprite of batch) {
+            if (pictures.has(sprite.exportNodeId)) continue;
+            const url = imageData.images?.[sprite.exportNodeId];
+            need(url, `Figma returned no PNG for ${sprite.path}`);
+            const pngResponse = await fetcher(url);
+            need(pngResponse.ok, `PNG download failed for ${sprite.path}: HTTP ${pngResponse.status}`);
+            const bytes = Buffer.from(await pngResponse.arrayBuffer());
+            need(bytes.length >= 45 && bytes.subarray(0, 8).equals(PNG_SIGNATURE), `Invalid PNG: ${sprite.path}`);
+            need(bytes.readUInt32BE(16) === sprite.width && bytes.readUInt32BE(20) === sprite.height, `PNG dimensions mismatch: ${sprite.path}`);
+            pictures.set(sprite.exportNodeId, bytes);
+        }
+    }
+    return pictures;
+}
+
 /** "A", "A and B", "A, B and C". */
 const listed = (words) => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
@@ -202,7 +336,12 @@ export function importTitle(imported = [], updated = []) {
     return phrases.map((phrase, i) => (i ? phrase[0].toLowerCase() + phrase.slice(1) : phrase)).join('; ');
 }
 
-export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT, fetcher = fetch, wanted = new Set() }) {
+/**
+ * Import what Figma asks for (discoverReadyPlants), and any sprite the garden
+ * has whose picture Figma now draws differently (keptSprites, compareKept).
+ * With `dryRun` nothing is written: the result says what would change.
+ */
+export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT, fetcher = fetch, wanted = new Set(), compareKept = true, dryRun = false }) {
     need(token, 'FIGMA_TOKEN is required.');
     const headers = { 'X-Figma-Token': token };
     const response = await fetcher(`https://api.figma.com/v1/files/${fileKey}`, { headers });
@@ -218,22 +357,31 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     const folders = (await import('node:fs')).readdirSync(resolve(root, 'src/assets/pack'), { withFileTypes: true })
         .filter(entry => entry.isDirectory() && /^plant_\d+$/.test(entry.name)).map(entry => entry.name);
     const plans = discoverReadyPlants(file, index, folders, wanted, plantRegistry(source));
-    if (!plans.length) return { imported: [], updated: [], unchanged: true };
+
+    // Drawings changed in place: the same components, other pixels.
+    const kept = compareKept ? keptSprites(file, index, wanted) : [];
+    const pictures = kept.length ? await renderSprites(kept, { fileKey, headers, fetcher }) : new Map();
+    for (const sprite of kept) {
+        const current = resolve(root, sprite.path);
+        const picture = pictures.get(sprite.exportNodeId);
+        if (existsSync(current) && samePicture(picture, readFileSync(current))) continue;
+        let plan = plans.find(candidate => candidate.plantType === sprite.plantType);
+        if (!plan) {
+            plan = { kind: 'update', plantType: sprite.plantType, displayName: sprite.displayName, familyNodeId: sprite.familyNodeId, parts: [], rename: null };
+            plans.push(plan);
+        }
+        if (plan.parts.some(part => part.path === sprite.path)) continue;
+        plan.parts.push({ ...sprite, bytes: picture });
+    }
+    if (!plans.length) return { imported: [], updated: [], unchanged: true, checked: kept.length };
 
     const parts = plans.flatMap(plan => plan.parts);
     const sprites = [];
     if (parts.length) {
-        const imageResponse = await fetcher(`https://api.figma.com/v1/images/${fileKey}?ids=${parts.map(part => encodeURIComponent(part.exportNodeId)).join(',')}&format=png&scale=1`, { headers });
-        need(imageResponse.ok, `Figma image export failed: HTTP ${imageResponse.status}`);
-        const imageData = await imageResponse.json();
+        const rendered = await renderSprites(parts.filter(part => !part.bytes), { fileKey, headers, fetcher });
         for (const part of parts) {
-            const url = imageData.images?.[part.exportNodeId];
-            need(url, `Figma returned no PNG for ${part.path}`);
-            const pngResponse = await fetcher(url);
-            need(pngResponse.ok, `PNG download failed for ${part.path}: HTTP ${pngResponse.status}`);
-            const bytes = Buffer.from(await pngResponse.arrayBuffer());
-            need(bytes.length >= 45 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])), `Invalid PNG: ${part.path}`);
-            need(bytes.readUInt32BE(16) === part.width && bytes.readUInt32BE(20) === part.height, `PNG dimensions mismatch: ${part.path}`);
+            const bytes = part.bytes ?? rendered.get(part.exportNodeId);
+            need(bytes, `Figma returned no PNG for ${part.path}`);
             const entry = {
                 path: part.path, format: 'png', width: part.width, height: part.height, sha256: sha256(bytes),
                 status: 'unverified', sourceNodeId: part.sourceNodeId, sourceName: part.sourceName,
@@ -280,6 +428,16 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     }
     mapper = mapper.replace(mapperLine, line);
 
+    const imported = added.map(plan => ({ plantType: plan.plantType, name: plan.displayName, sprites: plan.parts.length }));
+    const updated = plans.filter(plan => plan.kind === 'update').map(plan => ({
+        plantType: plan.plantType, name: plan.displayName,
+        redrawn: plan.parts.filter(part => part.replaces).length,
+        added: plan.parts.filter(part => !part.replaces).length,
+        ...(plan.rename ? { renamedFrom: plan.rename.from } : {}),
+    }));
+    const changes = sprites.map(sprite => `${sprite.replaces ? 'redrawn' : 'new'} ${sprite.path}`);
+    if (dryRun) return { dryRun: true, imported, updated, title: importTitle(imported, updated), changes, checked: kept.length };
+
     for (const sprite of sprites) {
         const target = resolve(root, sprite.path);
         mkdirSync(dirname(target), { recursive: true });
@@ -294,20 +452,18 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     writeFileSync(indexPath, updatedIndex);
     writeFileSync(sourcePath, source);
     writeFileSync(mapperPath, mapper);
-    const imported = added.map(plan => ({ plantType: plan.plantType, name: plan.displayName, sprites: plan.parts.length }));
-    const updated = plans.filter(plan => plan.kind === 'update').map(plan => ({
-        plantType: plan.plantType, name: plan.displayName,
-        redrawn: plan.parts.filter(part => part.replaces).length,
-        added: plan.parts.filter(part => !part.replaces).length,
-        ...(plan.rename ? { renamedFrom: plan.rename.from } : {}),
-    }));
-    return { imported, updated, title: importTitle(imported, updated) };
+    return { imported, updated, title: importTitle(imported, updated), changes, checked: kept.length };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
         // FIGMA_PLANTS: the names typed into "Run workflow", imported even when not marked Ready for dev.
-        const result = await importReadyPlants({ token: process.env.FIGMA_TOKEN, wanted: wantedPlants(process.env.FIGMA_PLANTS) });
+        // FIGMA_DRY_RUN: report what would change, write nothing.
+        const result = await importReadyPlants({
+            token: process.env.FIGMA_TOKEN,
+            wanted: wantedPlants(process.env.FIGMA_PLANTS),
+            dryRun: /^(1|true|yes)$/i.test(process.env.FIGMA_DRY_RUN ?? ''),
+        });
         console.log(JSON.stringify(result));
     } catch (error) {
         console.error(error.message);

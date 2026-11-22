@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { discoverReadyPlants, importTitle, nativeSize, plantRegistry, wantedPlants } from './import-figma-plants.mjs';
+import { discoverReadyPlants, importReadyPlants, importTitle, keptSprites, nativeSize, plantRegistry, pngPixels, samePicture, wantedPlants } from './import-figma-plants.mjs';
+import { deflateSync } from 'node:zlib';
 
 function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plantNo = 10 } = {}) {
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 12, height: 8 };
@@ -206,7 +207,7 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
         { ok: true, arrayBuffer: async () => stemBytes.buffer.slice(stemBytes.byteOffset, stemBytes.byteOffset + stemBytes.byteLength) },
         { ok: true, arrayBuffer: async () => flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength) },
     ];
-    const result = await importReadyPlants({ token: 'test-token', root, fetcher: async () => replies.shift() });
+    const result = await importReadyPlants({ token: 'test-token', root, compareKept: false, fetcher: async () => replies.shift() });
     assert.deepEqual(result.imported, [{ plantType: 'plant_10', name: 'Fern', sprites: 2 }]);
     assert(existsSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')));
     assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')), stemBytes);
@@ -228,13 +229,13 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
         { ok: true, arrayBuffer: async () => stemBytes.buffer.slice(stemBytes.byteOffset, stemBytes.byteOffset + stemBytes.byteLength) },
         { ok: true, arrayBuffer: async () => flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength) },
     ];
-    const second = await importReadyPlants({ token: 'test-token', root, fetcher: async () => nextReplies.shift() });
+    const second = await importReadyPlants({ token: 'test-token', root, compareKept: false, fetcher: async () => nextReplies.shift() });
     assert.deepEqual(second.imported, [{ plantType: 'plant_11', name: 'Birch', sprites: 2 }]);
     assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_11: 'Birch'/);
     assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_11: 'Birch'/);
     assert.equal(JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'))).assets.length, 5);
-    const third = await importReadyPlants({ token: 'test-token', root, fetcher: async () => ({ ok: true, json: async () => file }) });
-    assert.deepEqual(third, { imported: [], updated: [], unchanged: true });
+    const third = await importReadyPlants({ token: 'test-token', root, compareKept: false, fetcher: async () => ({ ok: true, json: async () => file }) });
+    assert.deepEqual(third, { imported: [], updated: [], unchanged: true, checked: 0 });
 
     // Fern drawn again in Figma, in the same family with new components: its
     // files are drawn over where they are, and nothing is added to the registries.
@@ -249,7 +250,7 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
         { ok: true, arrayBuffer: async () => flowerAsStem },
         { ok: true, arrayBuffer: async () => flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength) },
     ];
-    const fourth = await importReadyPlants({ token: 'test-token', root, fetcher: async () => redrawReplies.shift() });
+    const fourth = await importReadyPlants({ token: 'test-token', root, compareKept: false, fetcher: async () => redrawReplies.shift() });
     assert.deepEqual(fourth.imported, []);
     assert.deepEqual(fourth.updated, [{ plantType: 'plant_10', name: 'Fern', redrawn: 2, added: 0 }]);
     assert.equal(fourth.title, 'New drawing for Fern');
@@ -313,4 +314,100 @@ test('reads the plant names and words commit titles for what came in', () => {
     assert.equal(importTitle([], [{ name: 'Leafy', redrawn: 0, added: 1 }]), 'More of Leafy');
     assert.equal(importTitle([], [{ name: 'Feather', renamedFrom: 'Plume', redrawn: 0, added: 0 }]), 'Plume is now Feather');
     assert.equal(importTitle(), 'Import Figma plants marked Ready for dev');
+});
+
+// --- Drawings changed in place ---
+
+const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (bytes) => { let c = 0xffffffff; for (const b of bytes) c = crcTable[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+const chunk = (type, data) => {
+    const head = Buffer.alloc(8); head.writeUInt32BE(data.length, 0); head.write(type, 4, 'ascii');
+    const tail = Buffer.alloc(4); tail.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, 'ascii'), data])), 0);
+    return Buffer.concat([head, data, tail]);
+};
+/** An RGBA PNG of `pixels` ([r,g,b,a] per pixel, row by row), every row with `filter` (0 none, 1 sub). */
+function png(width, height, pixels, { filter = 0, level = 9 } = {}) {
+    const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+    const raw = Buffer.alloc(height * (width * 4 + 1));
+    for (let y = 0; y < height; y++) {
+        raw[y * (width * 4 + 1)] = filter;
+        for (let x = 0; x < width * 4; x++) {
+            const value = pixels[y * width + Math.floor(x / 4)][x % 4];
+            const left = x >= 4 ? pixels[y * width + Math.floor(x / 4) - 1][x % 4] : 0;
+            raw[y * (width * 4 + 1) + 1 + x] = filter === 1 ? (value - left) & 255 : value;
+        }
+    }
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw, { level })), chunk('IEND', Buffer.alloc(0))]);
+}
+const picture = (colour, width = 3, height = 2) => Array.from({ length: width * height }, (_, i) => (i === 0 ? [0, 0, 0, 0] : colour));
+
+test('a picture is compared by its pixels, not by how it was written', () => {
+    const red = png(3, 2, picture([200, 30, 40, 255]));
+    const sameRedOtherBytes = png(3, 2, picture([200, 30, 40, 255]), { filter: 1, level: 1 });
+    assert.notEqual(red.toString('hex'), sameRedOtherBytes.toString('hex'));
+    assert.equal(samePicture(red, sameRedOtherBytes), true);
+    assert.equal(samePicture(red, png(3, 2, picture([201, 30, 40, 255]))), false);
+    assert.equal(samePicture(red, png(2, 3, picture([200, 30, 40, 255], 2, 3))), false);
+    // A fully transparent pixel is transparent, whatever colour it carries.
+    const clearRed = picture([200, 30, 40, 255]); clearRed[0] = [9, 9, 9, 0];
+    assert.equal(samePicture(red, png(3, 2, clearRed)), true);
+    assert.deepEqual(Array.from(pngPixels(red).rgba.slice(0, 8)), [0, 0, 0, 0, 200, 30, 40, 255]);
+    assert.equal(pngPixels(Buffer.from('not a png')), null);
+});
+
+test('a sprite redrawn in the same component replaces its file; an unchanged one is left; a dry run writes nothing', async t => {
+    const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const root = mkdtempSync(resolve(tmpdir(), 'garden-figma-kept-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const oldStem = png(3, 2, picture([90, 30, 60, 255]));
+    const oldFlower = png(3, 2, picture([80, 140, 230, 255]));
+    for (const dir of ['design', 'src/core', 'scripts', 'src/assets/pack/plant_10/stem', 'src/assets/pack/plant_10/flowers']) mkdirSync(resolve(root, dir), { recursive: true });
+    writeFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png'), oldStem);
+    writeFileSync(resolve(root, 'src/assets/pack/plant_10/flowers/flower1.png'), oldFlower);
+    writeFileSync(resolve(root, 'src/core/assets.ts'), "export const PLANT_TYPE_NAMES: Readonly<Record<string, string>> = {\n    plant_10: 'Parasol',\n};\n");
+    writeFileSync(resolve(root, 'scripts/map-design-assets.mjs'), "const PLANTS = { plant_10: 'Parasol' };\n");
+    const row = (path, sourceNodeId, bytes) => '    ' + JSON.stringify({ path, format: 'png', width: 3, height: 2, sha256: 'old', sourceNodeId });
+    writeFileSync(resolve(root, 'design/asset-map.json'), '{\n  "assets": [\n'
+        + [row('src/assets/pack/plant_10/flowers/flower1.png', '7:2'), row('src/assets/pack/plant_10/stem/stem1.png', '7:1')].join(',\n') + '\n  ]\n}\n');
+    const family = { id: '7:0', type: 'COMPONENT_SET', name: 'Source/Plants/Parasol', devStatus: { type: 'READY_FOR_DEV' }, children: [
+        { id: '7:1', type: 'COMPONENT', name: 'Variant=stem1, Part=Stem', absoluteBoundingBox: { width: 3, height: 2 } },
+        { id: '7:2', type: 'COMPONENT', name: 'Variant=flower1, Part=Flowers', absoluteBoundingBox: { width: 3, height: 2 } },
+    ] };
+    const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [family] }] } };
+    assert.deepEqual(keptSprites(file, JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'), 'utf8'))).map(s => [s.path, s.exportNodeId]), [
+        ['src/assets/pack/plant_10/stem/stem1.png', '7:1'],
+        ['src/assets/pack/plant_10/flowers/flower1.png', '7:2'],
+    ]);
+    // Figma now draws the stem in basic colours; the flower is the same picture, written differently.
+    const newStem = png(3, 2, picture([120, 40, 40, 255]));
+    const sameFlower = png(3, 2, picture([80, 140, 230, 255]), { filter: 1, level: 1 });
+    const figma = (url) => {
+        if (url.includes('/v1/files/')) return { ok: true, json: async () => file };
+        if (url.includes('/v1/images/')) return { ok: true, json: async () => ({ images: { '7:1': 'https://img/stem', '7:2': 'https://img/flower' } }) };
+        const bytes = url.endsWith('stem') ? newStem : sameFlower;
+        return { ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    };
+    const before = readFileSync(resolve(root, 'design/asset-map.json'), 'utf8');
+    const dry = await importReadyPlants({ token: 't', root, fetcher: async (url) => figma(url), dryRun: true });
+    assert.equal(dry.dryRun, true);
+    assert.deepEqual(dry.changes, ['redrawn src/assets/pack/plant_10/stem/stem1.png']);
+    assert.equal(dry.title, 'New drawing for Parasol');
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')), oldStem, 'a dry run writes nothing');
+    assert.equal(readFileSync(resolve(root, 'design/asset-map.json'), 'utf8'), before);
+
+    const result = await importReadyPlants({ token: 't', root, fetcher: async (url) => figma(url) });
+    assert.deepEqual(result.updated, [{ plantType: 'plant_10', name: 'Parasol', redrawn: 1, added: 0 }]);
+    assert.equal(result.checked, 2);
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')), newStem);
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/flowers/flower1.png')), oldFlower, 'the same picture is not rewritten');
+    const rows = JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'), 'utf8')).assets;
+    assert.equal(rows.find(r => r.path.endsWith('stem1.png')).sha256.length, 64);
+    assert.equal(rows.find(r => r.path.endsWith('flower1.png')).sha256, 'old');
+    assert.match(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), /plant_10: 'Parasol'/);
+
+    // Run again: Figma and the garden agree, nothing to do.
+    const again = await importReadyPlants({ token: 't', root, fetcher: async (url) => figma(url) });
+    assert.deepEqual(again, { imported: [], updated: [], unchanged: true, checked: 2 });
 });

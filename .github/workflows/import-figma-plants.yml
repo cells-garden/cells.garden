@@ -9,6 +9,11 @@ on:
         description: 'Also import these plants, even if not marked Ready for dev (comma-separated names, e.g. Leafy)'
         required: false
         default: ''
+      dry_run:
+        description: 'Only report what would change, push nothing'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -35,6 +40,7 @@ jobs:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
           # Empty on a scheduled run: then only plants marked Ready for dev come in.
           FIGMA_PLANTS: ${{ inputs.plants }}
+          FIGMA_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           node scripts/import-figma-plants.mjs > "$RUNNER_TEMP/figma-import.json"
           cat "$RUNNER_TEMP/figma-import.json"

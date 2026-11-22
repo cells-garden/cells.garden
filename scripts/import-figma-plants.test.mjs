@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { discoverReadyPlants, nativeSize, wantedPlants } from './import-figma-plants.mjs';
+import { discoverReadyPlants, importTitle, nativeSize, plantRegistry, wantedPlants } from './import-figma-plants.mjs';
 
 function fixture({ status = 'READY_FOR_DEV', flower = true, linked = true, plantNo = 10 } = {}) {
     const stem = { id: '10:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 12, height: 8 };
@@ -44,10 +44,19 @@ test('finds individual Figma image layers without EXPORTS copies', () => {
 test('does not import incomplete or already imported loose artwork', () => {
     assert.deepEqual(discoverReadyPlants(looseFixture({ status: null, flowers: false }), index), []);
     assert.throws(() => discoverReadyPlants(looseFixture({ flowers: false }), index), /stem and one flower/);
-    const sourceIds = ['30:1', '30:2', '30:3'];
-    const published = { assets: sourceIds.map(sourceNodeId => ({ sourceNodeId })) };
-    assert.deepEqual(discoverReadyPlants(looseFixture(), published, ['plant_10']), []);
-    assert.throws(() => discoverReadyPlants(looseFixture(), { assets: [{ sourceNodeId: '30:1' }] }), /Partially registered/);
+    const published = { assets: [
+        { path: 'src/assets/pack/plant_10/stem/stem4.png', sourceNodeId: '30:1' },
+        { path: 'src/assets/pack/plant_10/stem/stem3.png', sourceNodeId: '30:2' },
+        { path: 'src/assets/pack/plant_10/flowers/flower2.png', sourceNodeId: '30:3' },
+    ] };
+    assert.deepEqual(discoverReadyPlants(looseFixture(), published, ['plant_10'], new Set(), { plant_10: 'Leafy' }), []);
+    // One sprite already in the garden: the rest join that plant instead of making another.
+    const [more] = discoverReadyPlants(looseFixture(), { assets: [published.assets[0]] }, ['plant_10'], new Set(), { plant_10: 'Leafy' });
+    assert.equal(more.kind, 'update');
+    assert.deepEqual(more.parts.map(p => [p.path, p.replaces]), [
+        ['src/assets/pack/plant_10/stem/stem3.png', false],
+        ['src/assets/pack/plant_10/flowers/flower2.png', false],
+    ]);
 });
 
 test('recognizes component sets and rejects duplicate sprite variants', () => {
@@ -225,7 +234,30 @@ test('imports a Ready-for-dev family, exports exact PNG bytes and updates both r
     assert.match(readFileSync(resolve(root, 'scripts/map-design-assets.mjs'), 'utf8'), /plant_11: 'Birch'/);
     assert.equal(JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'))).assets.length, 5);
     const third = await importReadyPlants({ token: 'test-token', root, fetcher: async () => ({ ok: true, json: async () => file }) });
-    assert.deepEqual(third, { imported: [], unchanged: true });
+    assert.deepEqual(third, { imported: [], updated: [], unchanged: true });
+
+    // Fern drawn again in Figma, in the same family with new components: its
+    // files are drawn over where they are, and nothing is added to the registries.
+    const redrawn = { ...family, children: family.children.map(part => ({ ...part, id: part.id.replace('10:', '12:'), name: part.name.replace('stem1', 'stem_1') })) };
+    page.children[0] = redrawn;
+    const before = readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8');
+    const flowerAsStem = flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength);
+    redrawn.children[0] = { ...redrawn.children[0], width: flower.width, height: flower.height };
+    const redrawReplies = [
+        { ok: true, json: async () => file },
+        { ok: true, json: async () => ({ images: { '12:1': 'https://img/5', '12:2': 'https://img/6' } }) },
+        { ok: true, arrayBuffer: async () => flowerAsStem },
+        { ok: true, arrayBuffer: async () => flowerBytes.buffer.slice(flowerBytes.byteOffset, flowerBytes.byteOffset + flowerBytes.byteLength) },
+    ];
+    const fourth = await importReadyPlants({ token: 'test-token', root, fetcher: async () => redrawReplies.shift() });
+    assert.deepEqual(fourth.imported, []);
+    assert.deepEqual(fourth.updated, [{ plantType: 'plant_10', name: 'Fern', redrawn: 2, added: 0 }]);
+    assert.equal(fourth.title, 'New drawing for Fern');
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_10/stem/stem1.png')), flowerBytes, 'the stem file is drawn over, under its old name');
+    assert.equal(readFileSync(resolve(root, 'src/core/assets.ts'), 'utf8'), before);
+    const rows = JSON.parse(readFileSync(resolve(root, 'design/asset-map.json'))).assets;
+    assert.equal(rows.length, 5);
+    assert.equal(rows.find(row => row.path.endsWith('plant_10/stem/stem1.png')).sourceNodeId, '12:1');
 });
 
 test('ready families already published are not imported a second time', () => {
@@ -236,9 +268,49 @@ test('ready families already published are not imported a second time', () => {
     assert.deepEqual(discoverReadyPlants(fixture(), published, ['plant_10']), []);
 });
 
-test('a partly registered family cannot be silently duplicated as another type', () => {
+test('a partly registered family adds its new sprites to the same plant, never a second plant', () => {
     const published = { assets: [
         { path: 'src/assets/pack/plant_10/stem/stem1.png', sourceNodeId: '10:1' },
     ] };
-    assert.throws(() => discoverReadyPlants(fixture(), published, ['plant_10']), /Partially registered plant family/);
+    const plans = discoverReadyPlants(fixture(), published, ['plant_10'], new Set(), { plant_10: 'Fern' });
+    assert.deepEqual(plans.map(p => [p.kind, p.plantType, p.parts.map(part => part.path)]), [
+        ['update', 'plant_10', ['src/assets/pack/plant_10/flowers/flower1.png']],
+    ]);
+});
+
+test('a family found by name is drawn over; a renamed one renames the plant; two of one plant are refused', () => {
+    const variant = (id, name) => ({ id, type: 'COMPONENT', name, width: 39, height: 13 });
+    const plume = (name, ids) => ({ id: '296:415', type: 'COMPONENT_SET', name, devStatus: { type: 'READY_FOR_DEV' }, children: [
+        variant(ids[0], 'Part=Flowers, Variant=flower1'), variant(ids[1], 'Part=Stem, Variant=Stem1'), variant(ids[2], 'Part=Stem, Variant=Stem4'),
+    ] });
+    const file = (...families) => ({ document: { children: [{ id: '27:1966', name: 'ASSETS', children: families }] } });
+    const old = { assets: [
+        { path: 'src/assets/pack/plant_9/flowers/flower_1.png', sourceNodeId: '296:410' },
+        { path: 'src/assets/pack/plant_9/stem/Stem_1.png', sourceNodeId: '296:412' },
+    ] };
+    const registry = { plant_9: 'Plume', plant_10: 'Leafy' };
+    const [redraw] = discoverReadyPlants(file(plume('Source/Plants/Plume', ['476:1', '476:2', '476:3'])), old, ['plant_9', 'plant_10'], new Set(), registry);
+    assert.equal(redraw.kind, 'update');
+    assert.equal(redraw.plantType, 'plant_9');
+    assert.deepEqual(redraw.parts.map(p => [p.path, p.replaces]), [
+        ['src/assets/pack/plant_9/flowers/flower_1.png', true],
+        ['src/assets/pack/plant_9/stem/Stem_1.png', true],
+        ['src/assets/pack/plant_9/stem/stem4.png', false],
+    ]);
+    // Renamed in Figma, its sprites all known: only the name changes.
+    const mapped = { assets: [...old.assets, { path: 'src/assets/pack/plant_9/stem/Stem4.png', sourceNodeId: '296:499' }] };
+    const [renamed] = discoverReadyPlants(file(plume('Source/Plants/Feather', ['296:410', '296:412', '296:499'])), mapped, ['plant_9', 'plant_10'], new Set(), registry);
+    assert.deepEqual([renamed.kind, renamed.plantType, renamed.parts.length, renamed.rename], ['update', 'plant_9', 0, { from: 'Plume', to: 'Feather' }]);
+    assert.throws(() => discoverReadyPlants(file(plume('Source/Plants/Plume', ['1:1', '1:2', '1:3']), plume('Source/Plants/Plume', ['2:1', '2:2', '2:3'])), old, ['plant_9'], new Set(), registry), /Two plant families/);
+});
+
+test('reads the plant names and words commit titles for what came in', () => {
+    assert.deepEqual(plantRegistry("export const PLANT_TYPE_NAMES = {\n    plant_1: 'Bell',\n    plant_12: 'Rosa\\'s',\n};\n"), { plant_1: 'Bell', plant_12: "Rosa's" });
+    assert.deepEqual(plantRegistry('nothing here'), {});
+    assert.equal(importTitle([{ name: 'Parasol' }]), 'New plant: Parasol');
+    assert.equal(importTitle([{ name: 'A' }, { name: 'B' }, { name: 'C' }]), 'New plants: A, B and C');
+    assert.equal(importTitle([{ name: 'Parasol' }], [{ name: 'Plume', redrawn: 5, added: 0 }]), 'New plant: Parasol; new drawing for Plume');
+    assert.equal(importTitle([], [{ name: 'Leafy', redrawn: 0, added: 1 }]), 'More of Leafy');
+    assert.equal(importTitle([], [{ name: 'Feather', renamedFrom: 'Plume', redrawn: 0, added: 0 }]), 'Plume is now Feather');
+    assert.equal(importTitle(), 'Import Figma plants marked Ready for dev');
 });

@@ -17,6 +17,7 @@ import { ConfirmDeleteModal, CreateProjectModal, ShortcutsModal } from './modals
 import { View } from './ui';
 import { mineralOpacity, skyAt } from './garden-settings';
 import { EXTRAS } from './extras';
+import { snowing } from './weather';
 import { renderGardenItems } from './items';
 import { PanView } from './pan';
 import { HOLD_MS } from './touch';
@@ -39,6 +40,7 @@ import mountainsUrl from '../assets/mountains.png';
 import groundUrl from '../assets/ground_tile.png';
 import grassUrl from '../assets/grass.png';
 import starsPatternUrl from '../assets/stars_pattern.gif';
+import snowUrl from '../assets/snow.gif';
 import flower1Url from '../assets/pack/plant_1/flowers/flower1.png';
 import flower2Url from '../assets/pack/plant_1/flowers/flower2.png';
 
@@ -3072,6 +3074,14 @@ export class GardenView extends View {
         const bgLayer = world.createDiv("garden-bg-layer");
         bgLayer.style.backgroundImage = `url(${bgImageUrl})`;
         bgLayer.style.backgroundSize = `auto ${bgScaledH}px`;
+
+        if (snowing() && !this.containerEl.ownerDocument.documentElement.dataset.lite && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            const snowLayer = world.createDiv("garden-snow-layer");
+            snowLayer.style.backgroundImage = `url(${snowUrl})`;
+            void loadImage(snowUrl).then((snowImg) => {
+                snowLayer.style.backgroundSize = `${snowImg.naturalWidth * PIXEL_SCALE}px ${snowImg.naturalHeight * PIXEL_SCALE}px`;
+            });
+        }
 
         const groundLayer = world.createDiv("garden-ground-layer");
         const tile = Math.round(STEM_ORIGIN_WIDTH * PIXEL_SCALE / 3);

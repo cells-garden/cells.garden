@@ -452,6 +452,38 @@ async function changelogScenario(newContext, errors) {
     console.log(`What's new: ${titles.length} shown of ${entries.length}, newest "${entries[0].title}"`);
 }
 
+async function snowScenario(browser, errors) {
+    const layer = async (url, options = {}) => {
+        const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...options });
+        const page = await ctx.newPage();
+        watchErrors(page, 'snow', errors);
+        await page.goto(url, { waitUntil: 'networkidle' });
+        await page.waitForSelector('.garden-bg-layer');
+        return { ctx, page, snow: page.locator('.garden-snow-layer') };
+    };
+    const falling = await layer(`${BASE}?snow`);
+    await falling.page.waitForFunction(() => getComputedStyle(document.querySelector('.garden-snow-layer')).backgroundSize === '680px 840px');
+    const style = await falling.snow.evaluate(el => {
+        const css = getComputedStyle(el);
+        const ground = document.querySelector('.garden-ground-layer').getBoundingClientRect();
+        return { image: css.backgroundImage, blend: css.mixBlendMode, z: css.zIndex, events: css.pointerEvents, bottom: el.getBoundingClientRect().bottom, horizon: ground.top };
+    });
+    assert.match(style.image, /snow.*\.gif/, 'the snow is the animated frames from Figma');
+    assert.deepEqual([style.blend, style.z, style.events], ['screen', '9', 'none'], 'in front of the plants, its black left out, never in the way of a click');
+    assert(Math.abs(style.bottom - style.horizon) < 1, 'it falls to the horizon, not into the ground');
+    await shot(falling.page, '22-snow.png');
+    await falling.ctx.close();
+    for (const [url, options, why] of [
+        [`${BASE}?snow=0`, {}, '?snow=0 turns it off'],
+        [`${BASE}?snow`, { reducedMotion: 'reduce' }, 'not for those who asked for less motion'],
+    ]) {
+        const still = await layer(url, options);
+        assert.equal(await still.snow.count(), 0, why);
+        await still.ctx.close();
+    }
+    console.log('snow: falls in front of the plants with ?snow, and not with ?snow=0 or reduced motion');
+}
+
 async function routeScenario(browser, errors) {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const page = await ctx.newPage();
@@ -2734,6 +2766,7 @@ try {
     await routeScenario(browser, errors);
     await scenario(browser, errors);
     await changelogScenario(unmarkedContext, errors);
+    await snowScenario(browser, errors);
     if (supabaseUrl()) {
         // The full Chromium in headless mode: the lighter headless shell has no notifications to show a push with.
         const full = await chromium.launch({ channel: 'chromium' });

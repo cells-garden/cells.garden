@@ -143,6 +143,19 @@
     animation: var(--garden-cloud-animation, none);
 }
 
+.garden-snow-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--sky);
+    z-index: 9;
+    background-repeat: repeat;
+    mix-blend-mode: screen;
+    image-rendering: pixelated;
+    pointer-events: none;
+}
+
 /* The ground, from the horizon to the bottom of the world. */
 .garden-ground-layer {
     position: absolute;

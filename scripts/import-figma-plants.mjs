@@ -211,8 +211,10 @@ export function plantRegistry(source) {
  *
  * A family whose sprites are all in the garden under its own name asks
  * nothing. Removing a variant in Figma removes nothing from the garden.
+ * Given a `skipped` list, a family that cannot come in is noted there, with
+ * why, instead of stopping every other family.
  */
-export function discoverReadyPlants(file, index, existingFolders = [], wanted = new Set(), registry = {}) {
+export function discoverReadyPlants(file, index, existingFolders = [], wanted = new Set(), registry = {}, skipped = null) {
     const pages = file.document?.children || [];
     const page = pages.find(node => node.id === '27:1966' || node.name === 'ASSETS');
     need(page, 'Figma ASSETS page not found.');
@@ -229,51 +231,56 @@ export function discoverReadyPlants(file, index, existingFolders = [], wanted = 
     const plans = [];
     const claimed = new Set();
     for (const family of families) {
-        const displayName = family.name.slice('Source/Plants/'.length).trim();
-        need(displayName && !/[\\/:*?"<>|]/.test(displayName), `Invalid plant family name: ${family.name}`);
-        const sources = plantParts(family);
-        const mappedTypes = new Set(sources.map(part => sourceType.get(part.source.id)).filter(Boolean));
-        need(mappedTypes.size <= 1, `Plant family ${family.name} has sprites in more than one plant type: ${[...mappedTypes].join(', ')}`);
-        const known = [...mappedTypes][0] ?? typeByName.get(plantKey(displayName));
-        const plantType = known ?? `plant_${nextNumber}`;
-        need(!claimed.has(plantType), `Two plant families in Figma are both ${registry[plantType] ?? displayName} (${plantType})`);
-        const fresh = sources.filter(part => !sourceType.has(part.source.id));
-        const rename = known && registry[known] !== undefined && registry[known] !== displayName ? { from: registry[known], to: displayName } : null;
-        if (known && !fresh.length && !rename) continue;
-        claimed.add(plantType);
+        try {
+            const displayName = family.name.slice('Source/Plants/'.length).trim();
+            need(displayName && !/[\\/:*?"<>|]/.test(displayName), `Invalid plant family name: ${family.name}`);
+            const sources = plantParts(family);
+            const mappedTypes = new Set(sources.map(part => sourceType.get(part.source.id)).filter(Boolean));
+            need(mappedTypes.size <= 1, `Plant family ${family.name} has sprites in more than one plant type: ${[...mappedTypes].join(', ')}`);
+            const known = [...mappedTypes][0] ?? typeByName.get(plantKey(displayName));
+            const plantType = known ?? `plant_${nextNumber}`;
+            need(!claimed.has(plantType), `Two plant families in Figma are both ${registry[plantType] ?? displayName} (${plantType})`);
+            const fresh = sources.filter(part => !sourceType.has(part.source.id));
+            const rename = known && registry[known] !== undefined && registry[known] !== displayName ? { from: registry[known], to: displayName } : null;
+            if (known && !fresh.length && !rename) continue;
+            claimed.add(plantType);
 
-        // An update draws over the plant's own files where a variant matches, so cells keep their paths.
-        const own = known ? index.assets.filter(asset => typeOfPath(asset.path) === known) : [];
-        const parts = fresh.map(({ source, category, variant }) => {
-            const folder = `src/assets/pack/${plantType}/${category}/`;
-            const match = own.find(asset => asset.path.startsWith(folder) && variantKey(asset.path.slice(folder.length)) === variantKey(variant));
-            const path = match ? match.path : `${folder}${variant}.png`;
-            // A drawing replaced in Figma leaves its EXPORTS copy on the old component: that copy is passed over.
-            const listed = exports.get(path);
-            const exported = match && listed?.componentId !== source.id ? undefined : listed;
-            const size = nativeSize(source);
-            if (exported) {
-                const exportedSize = nativeSize(exported);
-                need(exported.type === 'INSTANCE' && exported.componentId === source.id
-                    && exportedSize.width === size.width && exportedSize.height === size.height,
-                    `EXPORTS instance does not reference ${source.name} at its native size: ${path}`);
+            // An update draws over the plant's own files where a variant matches, so cells keep their paths.
+            const own = known ? index.assets.filter(asset => typeOfPath(asset.path) === known) : [];
+            const parts = fresh.map(({ source, category, variant }) => {
+                const folder = `src/assets/pack/${plantType}/${category}/`;
+                const match = own.find(asset => asset.path.startsWith(folder) && variantKey(asset.path.slice(folder.length)) === variantKey(variant));
+                const path = match ? match.path : `${folder}${variant}.png`;
+                // A drawing replaced in Figma leaves its EXPORTS copy on the old component: that copy is passed over.
+                const listed = exports.get(path);
+                const exported = match && listed?.componentId !== source.id ? undefined : listed;
+                const size = nativeSize(source);
+                if (exported) {
+                    const exportedSize = nativeSize(exported);
+                    need(exported.type === 'INSTANCE' && exported.componentId === source.id
+                        && exportedSize.width === size.width && exportedSize.height === size.height,
+                        `EXPORTS instance does not reference ${source.name} at its native size: ${path}`);
+                }
+                need(Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0,
+                    `Invalid native dimensions for ${path}`);
+                return { path, category, variant, replaces: Boolean(match), sourceNodeId: source.id, sourceName: source.name,
+                    width: size.width, height: size.height, exportNodeId: exported?.id ?? source.id,
+                    exportName: exported ? path : source.name };
+            });
+            need(new Set(parts.map(part => part.path)).size === parts.length, `Duplicate sprite path in ${displayName}`);
+            if (known) {
+                plans.push({ kind: 'update', plantType, displayName, familyNodeId: family.id, parts, rename });
+                continue;
             }
-            need(Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0,
-                `Invalid native dimensions for ${path}`);
-            return { path, category, variant, replaces: Boolean(match), sourceNodeId: source.id, sourceName: source.name,
-                width: size.width, height: size.height, exportNodeId: exported?.id ?? source.id,
-                exportName: exported ? path : source.name };
-        });
-        need(new Set(parts.map(part => part.path)).size === parts.length, `Duplicate sprite path in ${displayName}`);
-        if (known) {
-            plans.push({ kind: 'update', plantType, displayName, familyNodeId: family.id, parts, rename });
-            continue;
+            need(parts.some(part => part.category === 'stem') && parts.some(part => part.category === 'flowers'),
+                `Plant family must contain at least one stem and one flower: ${displayName}`);
+            for (const part of parts) need(!index.assets.some(asset => asset.path === part.path), `Asset path already registered: ${part.path}`);
+            plans.push({ kind: 'new', plantType, displayName, familyNodeId: family.id, parts, rename: null });
+            nextNumber++;
+        } catch (error) {
+            if (!skipped) throw error;
+            skipped.push({ plant: family.name.slice('Source/Plants/'.length).trim(), reason: error.message });
         }
-        need(parts.some(part => part.category === 'stem') && parts.some(part => part.category === 'flowers'),
-            `Plant family must contain at least one stem and one flower: ${displayName}`);
-        for (const part of parts) need(!index.assets.some(asset => asset.path === part.path), `Asset path already registered: ${part.path}`);
-        plans.push({ kind: 'new', plantType, displayName, familyNodeId: family.id, parts, rename: null });
-        nextNumber++;
     }
     return plans;
 }
@@ -306,8 +313,13 @@ export function keptSprites(file, index, wanted = new Set()) {
     return kept;
 }
 
-/** Figma's PNGs of these sprites at their own size, checked, by exportNodeId. Asked for a few dozen at a time. */
-async function renderSprites(sprites, { fileKey, headers, fetcher }) {
+/**
+ * Figma's PNGs of these sprites at their own size, checked, by exportNodeId.
+ * Asked for a few dozen at a time. A sprite Figma does not draw at its
+ * component's size (say, a drawing moved outside its frame) is left out and
+ * noted in `skipped`, so the others still come in.
+ */
+async function renderSprites(sprites, { fileKey, headers, fetcher }, skipped) {
     const pictures = new Map();
     for (let start = 0; start < sprites.length; start += 50) {
         const batch = sprites.slice(start, start + 50);
@@ -317,14 +329,20 @@ async function renderSprites(sprites, { fileKey, headers, fetcher }) {
         const imageData = await imageResponse.json();
         for (const sprite of batch) {
             if (pictures.has(sprite.exportNodeId)) continue;
-            const url = imageData.images?.[sprite.exportNodeId];
-            need(url, `Figma returned no PNG for ${sprite.path}`);
-            const pngResponse = await fetcher(url);
-            need(pngResponse.ok, `PNG download failed for ${sprite.path}: HTTP ${pngResponse.status}`);
-            const bytes = Buffer.from(await pngResponse.arrayBuffer());
-            need(bytes.length >= 45 && bytes.subarray(0, 8).equals(PNG_SIGNATURE), `Invalid PNG: ${sprite.path}`);
-            need(bytes.readUInt32BE(16) === sprite.width && bytes.readUInt32BE(20) === sprite.height, `PNG dimensions mismatch: ${sprite.path}`);
-            pictures.set(sprite.exportNodeId, bytes);
+            try {
+                const url = imageData.images?.[sprite.exportNodeId];
+                need(url, 'Figma returned no PNG; is the component empty or hidden?');
+                const pngResponse = await fetcher(url);
+                need(pngResponse.ok, `PNG download failed: HTTP ${pngResponse.status}`);
+                const bytes = Buffer.from(await pngResponse.arrayBuffer());
+                need(bytes.length >= 45 && bytes.subarray(0, 8).equals(PNG_SIGNATURE), 'Figma sent an invalid PNG');
+                const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
+                need(width === sprite.width && height === sprite.height,
+                    `Figma draws it ${width}×${height} but its component is ${sprite.width}×${sprite.height}; keep the drawing inside the component's frame`);
+                pictures.set(sprite.exportNodeId, bytes);
+            } catch (error) {
+                skipped.push({ plant: sprite.displayName, sprite: sprite.sourceName, path: sprite.path, reason: error.message });
+            }
         }
     }
     return pictures;
@@ -371,15 +389,17 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     let mapper = readFileSync(mapperPath, 'utf8');
     const folders = (await import('node:fs')).readdirSync(resolve(root, 'src/assets/pack'), { withFileTypes: true })
         .filter(entry => entry.isDirectory() && /^plant_\d+$/.test(entry.name)).map(entry => entry.name);
-    const plans = discoverReadyPlants(file, index, folders, wanted, plantRegistry(source));
+    const skipped = [];
+    const report = (result) => (skipped.length ? { ...result, skipped } : result);
+    let plans = discoverReadyPlants(file, index, folders, wanted, plantRegistry(source), skipped);
 
     // Drawings changed in place: the same components, other pixels.
     const kept = compareKept ? keptSprites(file, index, wanted) : [];
-    const pictures = kept.length ? await renderSprites(kept, { fileKey, headers, fetcher }) : new Map();
+    const pictures = await renderSprites(kept, { fileKey, headers, fetcher }, skipped);
     for (const sprite of kept) {
         const current = resolve(root, sprite.path);
         const picture = pictures.get(sprite.exportNodeId);
-        if (existsSync(current) && samePicture(picture, readFileSync(current))) continue;
+        if (!picture || (existsSync(current) && samePicture(picture, readFileSync(current)))) continue;
         let plan = plans.find(candidate => candidate.plantType === sprite.plantType);
         if (!plan) {
             plan = { kind: 'update', plantType: sprite.plantType, displayName: sprite.displayName, familyNodeId: sprite.familyNodeId, parts: [], rename: null };
@@ -388,12 +408,21 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
         if (plan.parts.some(part => part.path === sprite.path)) continue;
         plan.parts.push({ ...sprite, bytes: picture });
     }
-    if (!plans.length) return { imported: [], updated: [], unchanged: true, checked: kept.length };
+
+    const rendered = await renderSprites(plans.flatMap(plan => plan.parts.filter(part => !part.bytes).map(part => ({ ...part, displayName: plan.displayName }))),
+        { fileKey, headers, fetcher }, skipped);
+    plans = plans.map(plan => ({ ...plan, parts: plan.parts.filter(part => part.bytes || rendered.has(part.exportNodeId)) })).filter(plan => {
+        if (plan.kind === 'new' && !(plan.parts.some(part => part.category === 'stem') && plan.parts.some(part => part.category === 'flowers'))) {
+            skipped.push({ plant: plan.displayName, reason: 'Not added yet: it needs at least one stem and one flower that Figma can draw' });
+            return false;
+        }
+        return plan.parts.length || plan.rename;
+    });
+    if (!plans.length) return report({ imported: [], updated: [], unchanged: true, checked: kept.length });
 
     const parts = plans.flatMap(plan => plan.parts);
     const sprites = [];
     if (parts.length) {
-        const rendered = await renderSprites(parts.filter(part => !part.bytes), { fileKey, headers, fetcher });
         for (const part of parts) {
             const bytes = part.bytes ?? rendered.get(part.exportNodeId);
             need(bytes, `Figma returned no PNG for ${part.path}`);
@@ -451,7 +480,7 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
         ...(plan.rename ? { renamedFrom: plan.rename.from } : {}),
     }));
     const changes = sprites.map(sprite => `${sprite.replaces ? 'redrawn' : 'new'} ${sprite.path}`);
-    if (dryRun) return { dryRun: true, imported, updated, title: importTitle(imported, updated), changes, checked: kept.length };
+    if (dryRun) return report({ dryRun: true, imported, updated, title: importTitle(imported, updated), changes, checked: kept.length });
 
     for (const sprite of sprites) {
         const target = resolve(root, sprite.path);
@@ -467,7 +496,7 @@ export async function importReadyPlants({ token, fileKey = FILE_KEY, root = ROOT
     writeFileSync(indexPath, updatedIndex);
     writeFileSync(sourcePath, source);
     writeFileSync(mapperPath, mapper);
-    return { imported, updated, title: importTitle(imported, updated), changes, checked: kept.length };
+    return report({ imported, updated, title: importTitle(imported, updated), changes, checked: kept.length });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -480,6 +509,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             dryRun: /^(1|true|yes)$/i.test(process.env.FIGMA_DRY_RUN ?? ''),
         });
         console.log(JSON.stringify(result));
+        for (const { plant, sprite, reason } of result.skipped ?? []) {
+            console.error(`::warning::${plant}${sprite ? ` (${sprite})` : ''} was not imported from Figma: ${reason}`);
+        }
     } catch (error) {
         console.error(error.message);
         process.exitCode = 1;

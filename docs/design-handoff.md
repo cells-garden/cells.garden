@@ -232,8 +232,11 @@ Ready for dev, and commits to `dev`:
   plants already in gardens show it) and its new name ("X is now Y").
 
 Pixels are compared as they look, so Figma's rounding in nearly transparent
-pixels is not a new drawing. Removing a variant in Figma removes nothing, and
-two families with one name stop the import. The commit is checked (typecheck,
+pixels is not a new drawing. Removing a variant in Figma removes nothing. A
+family or sprite that cannot come in (two families with one name, a new family
+without a stem and a flower, a drawing that reaches outside its component's
+frame) is left out with a warning on the run saying why; everything else still
+comes in, and it follows once fixed in Figma. The commit is checked (typecheck,
 lint, design tests, build) before it is pushed, and Vercel deploys `dev` to
 dev.cells.garden.
 

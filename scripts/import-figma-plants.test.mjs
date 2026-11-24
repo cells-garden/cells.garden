@@ -417,3 +417,46 @@ test('a sprite redrawn in the same component replaces its file; an unchanged one
     const again = await importReadyPlants({ token: 't', root, fetcher: async (url) => figma(url) });
     assert.deepEqual(again, { imported: [], updated: [], unchanged: true, checked: 2 });
 });
+
+test('a sprite drawn outside its frame, or a broken family, is set aside with why; the rest still comes in', async t => {
+    const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const root = mkdtempSync(resolve(tmpdir(), 'garden-figma-skip-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const oldStem = png(3, 2, picture([90, 30, 60, 255]));
+    const oldFlower = png(3, 2, picture([80, 140, 230, 255]));
+    for (const dir of ['design', 'src/core', 'scripts', 'src/assets/pack/plant_5/stem', 'src/assets/pack/plant_5/flowers']) mkdirSync(resolve(root, dir), { recursive: true });
+    writeFileSync(resolve(root, 'src/assets/pack/plant_5/stem/stem4.png'), oldStem);
+    writeFileSync(resolve(root, 'src/assets/pack/plant_5/flowers/flower1.png'), oldFlower);
+    writeFileSync(resolve(root, 'src/core/assets.ts'), "export const PLANT_TYPE_NAMES: Readonly<Record<string, string>> = {\n    plant_5: 'Arch',\n};\n");
+    writeFileSync(resolve(root, 'scripts/map-design-assets.mjs'), "const PLANTS = { plant_5: 'Arch' };\n");
+    const row = (path, sourceNodeId) => '    ' + JSON.stringify({ path, format: 'png', width: 3, height: 2, sha256: 'old', sourceNodeId });
+    writeFileSync(resolve(root, 'design/asset-map.json'), '{\n  "assets": [\n'
+        + [row('src/assets/pack/plant_5/flowers/flower1.png', '5:2'), row('src/assets/pack/plant_5/stem/stem4.png', '5:1')].join(',\n') + '\n  ]\n}\n');
+    const arch = { id: '5:0', type: 'FRAME', name: 'Source/Plants/Arch', devStatus: { type: 'READY_FOR_DEV' }, children: [
+        { id: '5:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem4', width: 3, height: 2 },
+        { id: '5:2', type: 'COMPONENT', name: 'Part=Flowers, Variant=flower1', width: 3, height: 2 },
+        { id: '5:3', type: 'COMPONENT', name: 'Part=Stem, Variant=stem6', width: 3, height: 2 },
+    ] };
+    const unfinished = { id: '6:0', type: 'FRAME', name: 'Source/Plants/Moss', devStatus: { type: 'READY_FOR_DEV' }, children: [
+        { id: '6:1', type: 'COMPONENT', name: 'Part=Stem, Variant=stem1', width: 3, height: 2 },
+    ] };
+    const file = { document: { children: [{ id: '27:1966', name: 'ASSETS', children: [arch, unfinished] }] } };
+    const stem6 = png(3, 2, picture([30, 120, 60, 255]));
+    const pngs = { stem4: png(6, 2, picture([90, 30, 60, 255], 6, 2)), flower1: oldFlower, stem6 };
+    const fetcher = async (url) => {
+        if (url.includes('/v1/files/')) return { ok: true, json: async () => file };
+        if (url.includes('/v1/images/')) return { ok: true, json: async () => ({ images: { '5:1': 'https://img/stem4', '5:2': 'https://img/flower1', '5:3': 'https://img/stem6' } }) };
+        const bytes = pngs[url.split('/').pop()];
+        return { ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    };
+    const result = await importReadyPlants({ token: 't', root, fetcher });
+    assert.deepEqual(result.updated, [{ plantType: 'plant_5', name: 'Arch', redrawn: 0, added: 1 }]);
+    assert.deepEqual(result.skipped.map(s => [s.plant, s.sprite ?? null, s.reason]), [
+        ['Moss', null, 'Plant family must contain at least one stem and one flower: Moss'],
+        ['Arch', 'Part=Stem, Variant=stem4', "Figma draws it 6×2 but its component is 3×2; keep the drawing inside the component's frame"],
+    ]);
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_5/stem/stem4.png')), oldStem, 'the garden keeps its drawing');
+    assert.deepEqual(readFileSync(resolve(root, 'src/assets/pack/plant_5/stem/stem6.png')), stem6);
+});

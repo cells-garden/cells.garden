@@ -11,7 +11,8 @@ import './shim';
 import { REALTIME_SUBSCRIBE_STATES, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
 import type { AssignNotice } from './assign';
 import { avatarEl } from './avatar';
-import { timeAgo, type CellTarget } from './notify-core';
+import { ICONS, setIcon } from './icons';
+import { badgeText, timeAgo, type CellTarget } from './notify-core';
 import { NOBODY_AVATAR, type Person } from './people';
 import { notThereYet } from './sharing';
 import { Modal } from './ui';
@@ -216,6 +217,31 @@ export class NotificationCenter {
 }
 
 /** The list: who, what and when, newest first. Tapping one opens its cell. */
+export class NotificationBell {
+    readonly el: HTMLButtonElement;
+
+    constructor(host: HTMLElement, onOpen: () => void) {
+        this.el = host.createEl('button', { cls: 'garden-bell-toggle', attr: { type: 'button' } });
+        this.el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onOpen();
+        });
+        this.show(null);
+    }
+
+    show(unread: number | null) {
+        const shown = unread !== null;
+        this.el.hidden = !shown;
+        document.documentElement.toggleAttribute('data-bell', shown);
+        setIcon(this.el, ICONS.bell);
+        const count = badgeText(unread ?? 0);
+        if (count) this.el.createSpan({ cls: 'garden-bell-badge', text: count });
+        const label = count ? `Notifications, ${unread} unread` : 'Notifications';
+        this.el.title = label;
+        this.el.setAttribute('aria-label', label);
+    }
+}
+
 export class NotificationsModal extends Modal {
     private unwatch: (() => void) | null = null;
 

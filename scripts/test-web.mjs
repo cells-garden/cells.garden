@@ -2026,7 +2026,7 @@ async function scenario(browser, errors) {
 // session in storage, a garden whose cells have people on them, the people,
 // two notifications and the notify function's door. Realtime is a socket that
 // never answers. Then: the pictures on the board and on the chip, the Assign
-// panel and what it saves and sends, the Notifications list and where a tap on
+// panel and what it saves and sends, the bell, the Notifications list and where a tap on
 // one leads, a cell's address, and the Notifications row in Settings on a
 // desktop and on an iPhone that has not added the app to its Home Screen.
 
@@ -2401,9 +2401,12 @@ async function accountScenario(browser, errors) {
     assert(clipIds.length > 5 && new Set(clipIds).size === clipIds.length, `pictures share a clip id: ${JSON.stringify(clipIds)}`);
     await shot(page, '10-assignees-desktop.png');
 
-    // The pill counts the unread notification.
-    await page.waitForSelector('.auth-pill .auth-pill-badge');
-    assert.equal(await page.textContent('.auth-pill .auth-pill-badge'), '1', 'one unread notification on the pill');
+    // The bell, between the board toggle and the corner's left, counts the unread notification.
+    await page.waitForSelector('.garden-bell-toggle .garden-bell-badge');
+    assert.equal(await page.textContent('.garden-bell-toggle .garden-bell-badge'), '1', 'one unread notification on the bell');
+    assert.equal(await page.locator('.auth-pill .garden-bell-badge, .auth-pill-badge').count(), 0, 'the pill no longer counts them');
+    const [bellBox, boardBox] = await Promise.all(['.garden-bell-toggle', '.garden-board-toggle'].map((sel) => page.$eval(sel, (el) => el.getBoundingClientRect().toJSON())));
+    assert(bellBox.right <= boardBox.left && boardBox.left - bellBox.right < 16 && Math.abs(bellBox.top - boardBox.top) < 8, `the bell sits just left of the board toggle: ${JSON.stringify([bellBox, boardBox])}`);
 
     // Assign: everyone who can see the cell, you first.
     await page.click('.kanban-scroll-container .garden-item[data-id="s_free"]', { button: 'right' });
@@ -2438,11 +2441,8 @@ async function accountScenario(browser, errors) {
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.garden-context-menu'));
 
-    // Notifications: the list, and a tap opens the cell.
-    await page.click('.auth-pill');
-    await page.waitForSelector(rowOf('Notifications'));
-    assert.equal(await page.textContent(`${rowOf('Notifications')} .garden-menu-sub`), '1 new');
-    await page.click(rowOf('Notifications'));
+    // Notifications: the bell opens the list, and a tap opens the cell.
+    await page.click('.garden-bell-toggle');
     await page.waitForSelector('.modal .garden-notification');
     const list = await page.$$eval('.modal .garden-notification', (els) => els.map((e) => [
         e.querySelector('.garden-notification-title').textContent, e.querySelector('.garden-notification-body').textContent, e.classList.contains('is-unread'),
@@ -2454,7 +2454,7 @@ async function accountScenario(browser, errors) {
     await page.waitForFunction(() => !document.querySelector('.modal-container'));
     await page.waitForSelector('.kanban-scroll-container .garden-item[data-id="s_free"].is-selected');
     assert.deepEqual(state.marked, ['aaaaaaaa-0000-4000-8000-000000000001'], 'the tapped notification is marked read');
-    await page.waitForFunction(() => !document.querySelector('.auth-pill .auth-pill-badge'));
+    await page.waitForFunction(() => !document.querySelector('.garden-bell-toggle .garden-bell-badge'));
 
     // A cell's address, followed with the app open, and at a cold start.
     await page.evaluate(() => { location.hash = '#cell=m_me&project=proj_a'; });
@@ -2558,9 +2558,10 @@ async function accountScenario(browser, errors) {
     await page.waitForSelector(moreFor('My garden'));
     const signedIn = await pillMenu(page);
     assert.deepEqual(signedIn, [
-        '# iver@example.com', '# Gardens [New garden space]', 'My garden ⋯', 'Notifications', 'Friends',
-        'My profile', 'Report issue', 'About', 'Export or import', 'Pets', 'Settings', 'Sign out',
+        '# Gardens [New garden space]', 'My garden ⋯', 'Friends',
+        'My profile', 'Pets', 'Settings', 'Export or import', 'Help', 'Sign out',
     ], `the signed-in pill menu: ${JSON.stringify(signedIn)}`);
+    assert.equal(await page.textContent(`${rowOf('Sign out')} .garden-menu-sub`), 'iver@example.com', 'the account beside Sign out');
     assert(!signedIn.some((row) => ['Tutorial garden', 'Add tutorial plant', 'New garden space'].includes(row)), 'no tutorial or New garden space rows when signed in');
     await shot(page, '21-pill-menu-desktop.png');
     // Keys walk through the + and the ⋯ like any row: up from My garden is the
@@ -2613,8 +2614,8 @@ async function accountScenario(browser, errors) {
     await page.click('.auth-pill');
     await page.waitForSelector(moreFor('Herb spiral'));
     assert.deepEqual(await pillMenu(page), [
-        '# iver@example.com', '# Gardens [New garden space]', 'My garden ⋯', 'Herb spiral ⋯', 'Notifications', 'Friends',
-        'My profile', 'Report issue', 'About', 'Export or import', 'Pets', 'Settings', 'Sign out',
+        '# Gardens [New garden space]', 'My garden ⋯', 'Herb spiral ⋯', 'Friends',
+        'My profile', 'Pets', 'Settings', 'Export or import', 'Help', 'Sign out',
     ]);
     await page.click(moreFor('Herb spiral'));
     assert.deepEqual(await actionsOf(page, 'Herb spiral'), {
@@ -2676,12 +2677,12 @@ async function accountScenario(browser, errors) {
     assert.equal(await page.locator('html[data-high-contrast]').count(), 0, 'old contrast preferences are inactive during beta');
     assert.equal(await page.evaluate(() => localStorage.getItem('cells.garden/high-contrast')), 'true', 'deferral does not erase a personal preference');
     await page.click('.auth-pill');
-    await page.click(rowOf('Report issue'));
-    const reportPanel = page.locator('.garden-menu-panel.is-open');
-    assert.equal(await reportPanel.getByRole('button', { name: 'Open a GitHub issue', exact: true }).count(), 1);
-    assert.equal(await reportPanel.getByRole('button', { name: 'cells.garden@proton.me', exact: true }).count(), 1);
-    assert((await reportPanel.innerText()).includes('cells.garden@proton.me'));
-    await page.click(rowOf('About'));
+    await page.click(rowOf('Help'));
+    const helpPanel = page.locator('.garden-menu-panel.is-open');
+    assert.equal(await helpPanel.getByRole('button', { name: 'Open a GitHub issue', exact: true }).count(), 1);
+    assert.equal(await helpPanel.getByRole('button', { name: 'cells.garden@proton.me', exact: true }).count(), 1);
+    assert((await helpPanel.innerText()).includes('cells.garden@proton.me'));
+    await page.click(rowOf('About cells.garden'));
     await page.getByRole('heading', { name: 'Give your projects a place to grow' }).waitFor();
     assert.equal(new URL(page.url()).pathname, '/about/');
     assert.equal(await page.getByRole('link', { name: 'Support cells.garden on Buy Me a Coffee' }).getAttribute('href'), 'https://buymeacoffee.com/cells.garden');

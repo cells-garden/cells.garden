@@ -19,7 +19,6 @@ import { avatarEl } from './avatar';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import { ICONS, setIcon } from './icons';
 import { openMenu, type MenuItem } from './menu';
-import { badgeText } from './notify-core';
 import { Modal, Setting } from './ui';
 
 export interface AuthOptions {
@@ -252,26 +251,18 @@ export class AuthPill {
         new SignInModal(this.client, { ...this.options, note }).open();
     }
 
-    /** Rows shown between the email and Sign out. Built each time the menu opens. */
+    /** Rows shown above Sign out. Built each time the menu opens. */
     setMenu(build: () => MenuItem[] | Promise<MenuItem[]>) {
         this.buildMenu = build;
     }
 
     private avatar: string | null = null;
-    private unread = 0;
     /** Runs before signing out, while the account can still tidy up after itself (web-push.ts). */
     beforeSignOut: (() => Promise<void>) | null = null;
 
     /** The signed-in user's picture, a drawing or a seed, once the profile is loaded. */
     setAvatar(avatar: string | null) {
         this.avatar = avatar;
-        this.render();
-    }
-
-    /** How many notifications are unread: a count on the pill, gone at none. */
-    setUnread(count: number) {
-        if (count === this.unread) return;
-        this.unread = count;
         this.render();
     }
 
@@ -307,13 +298,6 @@ export class AuthPill {
             this.el.appendChild(avatarEl(this.avatar ?? this.session.user.id, 18, 'auth-pill-avatar'));
             this.el.createSpan({ cls: 'auth-pill-label', text: name });
             this.el.toggleClass('is-shared', this.label !== null);
-            const count = badgeText(this.unread);
-            if (count) {
-                this.el.createSpan({ cls: 'auth-pill-badge', text: count });
-                this.el.setAttribute('aria-label', `${name}, ${this.unread} unread`);
-            } else {
-                this.el.removeAttribute('aria-label');
-            }
         } else {
             this.el.createSpan({ cls: 'auth-pill-label', text: 'Sign in' });
         }
@@ -330,8 +314,6 @@ export class AuthPill {
             openMenu([{ label: 'Sign in', onClick: () => this.signIn() }, ...items], this.el);
             return;
         }
-        const menu = openMenu([...items, { label: 'Sign out', onClick: () => void this.signOut() }], this.el);
-        const who = menu.createDiv({ cls: 'garden-menu-heading', text: this.session.user.email ?? '' });
-        menu.prepend(who);
+        openMenu([...items, { label: 'Sign out', sub: this.session.user.email, onClick: () => void this.signOut() }], this.el);
     }
 }

@@ -2511,7 +2511,7 @@ export class GardenView extends View {
         const gap = 8, edge = 8;
         const doc = this.containerEl.ownerDocument;
         let clear = 0;
-        for (const el of Array.from(doc.querySelectorAll<HTMLElement>('.garden-board-toggle, .garden-pan-toggle, .garden-pan-exit, .auth-pill, .garden-files-button'))) {
+        for (const el of Array.from(doc.querySelectorAll<HTMLElement>('.garden-board-toggle, .garden-bell-toggle, .garden-pan-toggle, .garden-pan-exit, .auth-pill, .garden-files-button'))) {
             const b = el.getBoundingClientRect();
             if (b.width && b.height) clear = Math.max(clear, b.bottom + 6 - frame.top);
         }

@@ -8,11 +8,11 @@
 import './shim';
 import { GardenApp, type Account } from './app';
 import { assignNotice } from './assign';
-import { AboutModal, reportIssueItem } from './support';
+import { AboutModal, helpItem } from './support';
 import { AuthPill, type AuthOptions } from './auth';
 import { menuRow, type MenuItem } from './menu';
 import { gardenTags, tagKey } from './tags';
-import { NotificationCenter, NotificationsModal, sendAssignNotice } from './notifications';
+import { NotificationBell, NotificationCenter, NotificationsModal, sendAssignNotice } from './notifications';
 import { cellTargetFromHash, type CellTarget } from './notify-core';
 import { People } from './people';
 import { PlantSync } from './plants';
@@ -185,6 +185,10 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
     let center: NotificationCenter | null = null;
     /** The row id of the signed-in user's own garden, once asked; it never changes. */
     let ownId: string | null = null;
+    const bell = new NotificationBell(host, () => {
+        const inbox = center;
+        if (inbox?.available) new NotificationsModal(inbox, (id) => people?.get(id), (target) => void openCell(target)).open();
+    });
 
     const ownGardenRow = async (uid: string): Promise<string | null> => {
         ownId ??= (await ownGardenId(supabase, uid).catch(() => null))?.id ?? null;
@@ -365,10 +369,10 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
         });
     }
 
-    /** The count on the pill and on the app's icon. */
+    /** The count on the bell and on the app's icon. */
     const showUnread = () => {
         const unread = center?.unread ?? 0;
-        pill.setUnread(unread);
+        bell.show(center?.available ? unread : null);
         setAppBadge(unread);
     };
 
@@ -456,7 +460,8 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
         const uid = currentUser;
         const petCount = activePetCount(app.settings);
         const itemCount = shownItems(app.settings).length;
-        const about: MenuItem = { label: 'About', onClick: () => routes ? location.assign('/about/') : new AboutModal().open() };
+        const openAbout = () => routes ? location.assign('/about/') : new AboutModal().open();
+        const about: MenuItem = { label: 'About', onClick: openAbout };
         // Signed out on the web, the menu is the way in: the practice garden to
         // try things in and the page that says what this is, after Sign in
         // (auth.ts puts it first). The rest of the menu comes with an account.
@@ -476,9 +481,6 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
             // The extension and Obsidian have no tutorial garden to go to, so
             // signed out there the tutorial plant can still be added here.
             ...(!uid ? [{ label: 'Add tutorial plant', onClick: () => app.addProject(tutorialPlant()) }] : []),
-            reportIssueItem(),
-            about,
-            { label: 'Export or import', onClick: () => openGardenFiles(app) },
             // Items wait for Max's approval, so only a build with the extras offers them.
             ...(EXTRAS ? [{
                 label: 'Items',
@@ -503,6 +505,8 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
                     onName: (name) => people?.updateMe({ name }),
                 } : null, app).open(),
             },
+            { label: 'Export or import', onClick: () => openGardenFiles(app) },
+            helpItem(openAbout),
         ];
         if (!uid || !(await sharingAvailable(supabase))) return common;
         const [gardens, spaces, own, offers] = await Promise.all([
@@ -630,14 +634,6 @@ export async function bootGarden(host: HTMLElement, options: BootOptions = {}): 
                 active: shared?.id === g.id,
                 onClick: () => { openGarden(uid, { id: g.id, name: g.name }).catch(fail); },
                 actions: [leaveItem(g)],
-            });
-        }
-        const inbox = center;
-        if (inbox?.available) {
-            items.push({
-                label: 'Notifications',
-                sub: inbox.unread ? `${inbox.unread} new` : undefined,
-                onClick: () => new NotificationsModal(inbox, (id) => people?.get(id), (target) => void openCell(target)).open(),
             });
         }
         items.push({

@@ -49,9 +49,10 @@ if (import.meta.env.MODE === 'design-review') {
 
 const typeOf = (kind: string) => ITEM_TYPES.find(type => type.kind === kind);
 
-/** The items this client draws: those of a kind it knows. */
+/** The items this client draws: those of a kind it knows, one of each kind. */
 export function shownItems(settings: GardenSettings): GardenItem[] {
-    return settings.items.filter(item => typeOf(item.kind));
+    const seen = new Set<string>();
+    return settings.items.filter(item => typeOf(item.kind) && !seen.has(item.kind) && seen.add(item.kind));
 }
 
 /** What the item layer needs from the garden view. */
@@ -84,6 +85,7 @@ function saveItems(app: GardenApp, items: GardenItem[]) {
 
 /** Put a new item on the ground in the middle of the camera's view, where no plant hides it (GardenView.itemSpot). */
 export function placeItem(app: GardenApp, kind: ItemKind) {
+    if (app.settings.items.some(item => item.kind === kind)) return;
     const id = kind + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const x = app.view?.itemSpot(shownItems(app.settings).map(item => item.x)) ?? 0;
     saveItems(app, [...app.settings.items, { id, kind, x: storedX(x) }]);
@@ -95,7 +97,8 @@ function moveItem(app: GardenApp, id: string, x: number) {
 }
 
 function removeItem(app: GardenApp, id: string) {
-    saveItems(app, app.settings.items.filter(item => item.id !== id));
+    const kind = app.settings.items.find(item => item.id === id)?.kind;
+    saveItems(app, app.settings.items.filter(item => item.kind !== kind));
     app.view?.scheduleRender();
 }
 
@@ -248,7 +251,7 @@ function drawItem(
     el.addEventListener('lostpointercapture', cancel);
 }
 
-/** Main menu -> Items: one tile per kind; a tap puts one in the garden. */
+/** Main menu -> Items: one tile per kind; a tap puts it in the garden, or takes it out again. */
 export class ItemsModal extends Modal {
     constructor(private readonly app: GardenApp) {
         super();
@@ -262,15 +265,17 @@ export class ItemsModal extends Modal {
 
         const grid = contentEl.createDiv('garden-tiles');
         for (const type of ITEM_TYPES) {
-            const count = this.app.settings.items.filter(item => item.kind === type.kind).length;
+            const placed = this.app.settings.items.find(item => item.kind === type.kind);
             pictureTile(grid, {
                 kind: type.kind,
                 label: type.label,
                 preview: type.preview,
-                state: count ? count + ' placed' : 'Add',
+                state: placed ? 'Placed' : 'Add',
+                pressed: !!placed,
                 onClick: () => {
-                    placeItem(this.app, type.kind);
-                    // Out of the way, so the new item shows where it landed.
+                    if (placed) removeItem(this.app, placed.id);
+                    else placeItem(this.app, type.kind);
+                    // Out of the way, so the garden shows what changed.
                     this.close();
                 },
             });

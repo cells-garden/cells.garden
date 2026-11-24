@@ -1930,7 +1930,7 @@
     gap: 8px;
     width: 100%;
     height: auto;
-    padding: 6px 16px;
+    padding: 5px 14px;
     background: none;
     border: none;
     border-radius: 0;
@@ -1979,7 +1979,7 @@
 
 .garden-menu-heading {
     margin-top: 4px;
-    padding: 8px 16px 6px;
+    padding: 6px 14px 4px;
     border-top: 1px solid var(--background-modifier-border);
     font-size: 11px;
     text-transform: uppercase;
@@ -2045,7 +2045,7 @@
 
 /* A line of text in a panel instead of choices: loading, or why there are none. */
 .garden-menu-note {
-    padding: 8px 16px;
+    padding: 6px 14px;
     font-size: 12px;
     color: var(--text-muted);
 }
@@ -2156,22 +2156,7 @@
     }
 }
 
-/* --- Notifications (notifications.ts): the count on the pill, and the list --- */
-.auth-pill-badge {
-    flex-shrink: 0;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    box-sizing: border-box;
-    border-radius: 8px;
-    background: #E91E63;
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-    line-height: 16px;
-    text-align: center;
-}
-
+/* --- Notifications (notifications.ts): the list --- */
 .garden-notifications-head {
     display: flex;
     align-items: baseline;

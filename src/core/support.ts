@@ -7,20 +7,20 @@ export const SUPPORT_EMAIL = 'cells.garden@proton.me';
 export const ABOUT_URL = 'https://cells.garden/about/';
 export const SUPPORT_URL = 'https://buymeacoffee.com/cells.garden';
 
-export function reportIssueItem(): MenuItem {
+export function helpItem(openAbout: () => void): MenuItem {
     return {
-        label: 'Report issue',
+        label: 'Help',
         panel: (panel, menu) => {
-            const github = menuRow(panel, { label: 'Open a GitHub issue' });
-            github.onclick = () => {
-                menu.close();
-                window.open(ISSUE_URL, '_blank', 'noopener,noreferrer');
-            };
-            const email = menuRow(panel, { label: SUPPORT_EMAIL });
-            email.onclick = () => {
-                menu.close();
-                window.open(`mailto:${SUPPORT_EMAIL}`, '_blank', 'noopener,noreferrer');
-            };
+            for (const [label, open] of [
+                ['About cells.garden', openAbout],
+                ['Open a GitHub issue', () => window.open(ISSUE_URL, '_blank', 'noopener,noreferrer')],
+                [SUPPORT_EMAIL, () => window.open(`mailto:${SUPPORT_EMAIL}`, '_blank', 'noopener,noreferrer')],
+            ] as const) {
+                menuRow(panel, { label }).onclick = () => {
+                    menu.close();
+                    open();
+                };
+            }
         },
     };
 }

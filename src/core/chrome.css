@@ -4,14 +4,26 @@
  * page-level rules and the theme tokens stay in each shell.
  */
 
+:root {
+    --corner-gap: 12px;
+    --corner-button: 28px;
+    --corner-top: calc(var(--corner-gap) - 3px + env(safe-area-inset-top, 0px));
+    --corner-right: calc(var(--corner-gap) - (var(--corner-button) - 14px) / 2 + env(safe-area-inset-right, 0px));
+    --corner-step: calc(var(--corner-button) + 4px);
+}
+
+@media (pointer: coarse) {
+    :root { --corner-button: 34px; }
+}
+
 /* --- Sign-in pill (M1), and the Files button in its place without an account ---
    viewport-fit=cover draws under the status bar and the home indicator, so the
    sky reaches the top edge; the corner controls stay inside the safe area. */
 .auth-pill,
 .garden-files-button {
     position: fixed;
-    top: calc(8px + env(safe-area-inset-top, 0px));
-    left: calc(8px + env(safe-area-inset-left, 0px));
+    top: calc(var(--corner-gap) + env(safe-area-inset-top, 0px));
+    left: calc(var(--corner-gap) + env(safe-area-inset-left, 0px));
     z-index: 50;
     border-radius: 999px;
     border: 1px solid var(--background-modifier-border);
@@ -110,11 +122,11 @@
 /* --- The corner button: show or hide the board --- */
 .garden-board-toggle {
     position: fixed;
-    top: calc(8px + env(safe-area-inset-top, 0px));
-    right: calc(8px + env(safe-area-inset-right, 0px));
+    top: var(--corner-top);
+    right: var(--corner-right);
     z-index: 50;
-    width: 28px;
-    height: 28px;
+    width: var(--corner-button);
+    height: var(--corner-button);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -140,11 +152,11 @@
 /* --- The notification bell (notifications.ts), left of the board toggle --- */
 .garden-bell-toggle {
     position: fixed;
-    top: calc(8px + env(safe-area-inset-top, 0px));
-    right: calc(46px + env(safe-area-inset-right, 0px));
+    top: var(--corner-top);
+    right: calc(var(--corner-right) + var(--corner-step));
     z-index: 50;
-    width: 34px;
-    height: 34px;
+    width: var(--corner-button);
+    height: var(--corner-button);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -206,18 +218,18 @@
 .garden-pan-toggle {
     display: none;
     position: fixed;
-    top: calc(8px + env(safe-area-inset-top, 0px));
-    right: calc(46px + env(safe-area-inset-right, 0px));
+    top: var(--corner-top);
+    right: calc(var(--corner-right) + var(--corner-step));
     z-index: 50;
 }
 :root[data-bell] .garden-pan-toggle {
-    right: calc(84px + env(safe-area-inset-right, 0px));
+    right: calc(var(--corner-right) + 2 * var(--corner-step));
 }
 .garden-pan-exit {
     display: flex;
     position: absolute;
-    top: var(--pan-exit-top, calc(8px + env(safe-area-inset-top, 0px)));
-    right: var(--pan-exit-right, calc(46px + env(safe-area-inset-right, 0px)));
+    top: var(--pan-exit-top, var(--corner-top));
+    right: var(--pan-exit-right, calc(var(--corner-right) + var(--corner-step)));
     z-index: 50;
 }
 
@@ -293,11 +305,6 @@
     .garden-bell-toggle,
     .garden-board-toggle {
         opacity: 1;
-    }
-
-    .garden-board-toggle {
-        width: 34px;
-        height: 34px;
     }
 
     .garden-pan-toggle {

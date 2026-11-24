@@ -19,6 +19,7 @@ if (!host) throw new Error('cells.garden: #app element missing');
 const nav: Navigator = navigator;
 const IOS = isIos(nav.userAgent, nav.maxTouchPoints);
 if (IOS) document.documentElement.dataset.lite = 'true';
+if ((nav as Navigator & { standalone?: boolean }).standalone === true) document.documentElement.dataset.standalone = 'true';
 
 /** What went wrong, on screen, with the system version: a screenshot is enough to report it. */
 function showProblem(message: string) {

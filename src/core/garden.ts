@@ -1888,6 +1888,8 @@ export class GardenView extends View {
 
         if (isMiddle || isLeftEmpty) {
             e.preventDefault();
+            const focused = container.ownerDocument.activeElement;
+            if (isLeftEmpty && focused instanceof HTMLElement && container.contains(focused)) focused.blur();
             this.clearSelection(); // Clear multi-selection when clicking empty space
             this.isPanningKanban = true;
             this.kanbanStartX = e.clientX;

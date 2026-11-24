@@ -38,7 +38,7 @@ function invalidCompressedPng(bytes) {
     return Buffer.concat(parts);
 }
 try {
-    for (const input of ['src', 'public', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json', 'design']) {
+    for (const input of ['src', 'public', 'vite.config.ts', 'scripts/changelog.mjs', 'tsconfig.json', 'package.json', 'package-lock.json', 'design']) {
         cpSync(resolve(ROOT, input), resolve(temporary, input), { recursive: true });
     }
     mkdirSync(resolve(temporary, 'dist'));

@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 import { ROOT, stagedAsset, sha256 } from './design-assets.mjs';
 
 const MODULE = fileURLToPath(import.meta.url);
-const INPUTS = ['src', 'public', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json'];
+const INPUTS = ['src', 'public', 'vite.config.ts', 'scripts/changelog.mjs', 'tsconfig.json', 'package.json', 'package-lock.json'];
 const FIXED_TIME = '2026-09-30T12:00:00.000Z';
 const VIEWPORTS = [{ name: 'desktop', width: 1280, height: 900 }, { name: 'mobile', width: 390, height: 844 }];
 const requireThat = (value, message) => { if (!value) throw new Error(message); };

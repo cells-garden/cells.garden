@@ -42,7 +42,7 @@ function assertUnchangedOrigins() {
 }
 
 try {
-    for (const input of ['src', 'public', 'design', '.gitignore', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json']) {
+    for (const input of ['src', 'public', 'design', '.gitignore', 'vite.config.ts', 'scripts/changelog.mjs', 'tsconfig.json', 'package.json', 'package-lock.json']) {
         cpSync(resolve(ROOT, input), resolve(temporary, input), { recursive: true });
     }
     git(['init', '-b', 'dev']);

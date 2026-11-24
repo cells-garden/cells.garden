@@ -49,7 +49,7 @@ export const PLANT_TYPES: string[] = Array.from(
 /** Product labels for the bundled plant types. */
 export const PLANT_TYPE_NAMES: Readonly<Record<string, string>> = {
     plant_1: 'Bell',
-    plant_2: 'Branch',
+    plant_2: 'Bushy',
     plant_3: 'Vine',
     plant_4: 'Spray',
     plant_5: 'Arch',

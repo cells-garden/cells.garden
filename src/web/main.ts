@@ -19,7 +19,19 @@ if (!host) throw new Error('cells.garden: #app element missing');
 const nav: Navigator = navigator;
 const IOS = isIos(nav.userAgent, nav.maxTouchPoints);
 if (IOS) document.documentElement.dataset.lite = 'true';
-if ((nav as Navigator & { standalone?: boolean }).standalone === true) document.documentElement.dataset.standalone = 'true';
+if ((nav as Navigator & { standalone?: boolean }).standalone === true) {
+    document.documentElement.dataset.standalone = 'true';
+    if (/iPhone|iPod/.test(nav.userAgent)) {
+        const fitScreen = () => {
+            const portrait = window.matchMedia('(orientation: portrait)').matches;
+            const full = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+            document.documentElement.style.setProperty('--app-height', `${Math.max(full, window.innerHeight)}px`);
+        };
+        fitScreen();
+        window.addEventListener('resize', fitScreen);
+        window.addEventListener('orientationchange', fitScreen);
+    }
+}
 
 /** What went wrong, on screen, with the system version: a screenshot is enough to report it. */
 function showProblem(message: string) {

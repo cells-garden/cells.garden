@@ -63,9 +63,9 @@ body {
 }
 
 /* The installed iPhone app draws under its black-translucent status bar, but
-   WebKit measures dvh and vh from the bottom of that bar, so either stops one
-   status bar short of the screen and leaves a bare band at the bottom. There
-   the app takes its height from its top and bottom edges (inset: 0) instead. */
+   WebKit measures dvh, vh and the viewport itself from the bottom of that bar,
+   so each stops one status bar short of the screen and leaves a bare band at
+   the bottom. There main.ts gives the app the screen's own height. */
 @media (display-mode: standalone), (display-mode: fullscreen) {
     #app {
         height: auto;
@@ -73,7 +73,7 @@ body {
 }
 
 :root[data-standalone] #app {
-    height: auto;
+    height: var(--app-height, auto);
 }
 
 .view,
